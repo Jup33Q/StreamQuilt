@@ -1,0 +1,6 @@
+.build/
+*.png
+!docs/*.png
+.DS_Store
+/lkg-quilt
+legacy/
