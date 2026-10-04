@@ -72,11 +72,14 @@ final class AIBlockCityScene {
     }
 
     /// Full-quilt HDR raymarch — the always-fresh 3D backbone under AI tiles.
-    func encodeBase(cmd: MTLCommandBuffer, time: Float) {
+    /// `into: nil` renders into the main quilt; pass the alt target for raw peek.
+    func encodeBase(cmd: MTLCommandBuffer, time: Float, into altTarget: MTLTexture? = nil) {
         let t = time * timeScale
-        guard let target = renderer.quiltTexture else { return }
+        guard let target = altTarget ?? renderer.quiltTexture else { return }
         let spec = renderer.spec
-        let pass = renderer.makeQuiltPassDescriptor(loadAction: .dontCare)
+        let pass = altTarget != nil
+            ? renderer.makeAltQuiltPassDescriptor(loadAction: .dontCare)
+            : renderer.makeQuiltPassDescriptor(loadAction: .dontCare)
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.setRenderPipelineState(basePSO)
         var p = BaseParams(

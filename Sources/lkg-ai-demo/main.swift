@@ -23,6 +23,7 @@ struct CLI {
     var strength: Float = 0.45
     var renderSize = 512
     var dumpPath: String?
+    var peekDumpPath: String?
     var time: Float = 1.2
     var showPreview = true
     var renderScale: Float = 1.0
@@ -51,6 +52,7 @@ while i < args.count {
     case "--strength": cli.strength = Float(args[i + 1]) ?? 0.45; i += 1
     case "--render-size": cli.renderSize = Int(args[i + 1]) ?? 512; i += 1
     case "--dump": cli.dumpPath = args[i + 1]; i += 1
+    case "--peek-dump": cli.peekDumpPath = args[i + 1]; i += 1
     case "--time": cli.time = Float(args[i + 1]) ?? 1.2; i += 1
     case "--no-preview": cli.showPreview = false
     case "--half": cli.renderScale = 0.5
@@ -79,10 +81,22 @@ func selectSpec() -> QuiltSpec {
 }
 
 do {
-    let renderer = try QuiltRenderer(spec: selectSpec(), renderScale: cli.renderScale)
-    let scene = try AIBlockCityScene(renderer: renderer, viewSize: cli.renderSize)
+    if let peekPath = cli.peekDumpPath {
+        let renderer = try QuiltRenderer(spec: selectSpec(), renderScale: cli.renderScale)
+        let scene = try AIBlockCityScene(renderer: renderer, viewSize: cli.renderSize)
+        // Offline peek check: raw raymarch into the alt quilt, interlaced from it.
+        renderer.makeAltQuiltTarget()
+        let calibration = Calibration.fetchFromBridge() ?? .lkgGoFallback
+        renderer.saveLenticularPNG(to: peekPath, calibration: calibration,
+                                   source: renderer.altQuiltTexture) { cmd in
+            scene.encodeBase(cmd: cmd, time: cli.time, into: renderer.altQuiltTexture)
+        }
+        exit(0)
+    }
 
     if let dumpPath = cli.dumpPath {
+        let renderer = try QuiltRenderer(spec: selectSpec(), renderScale: cli.renderScale)
+        let scene = try AIBlockCityScene(renderer: renderer, viewSize: cli.renderSize)
         // Offline: render base, diffuse all views synchronously, save quilt PNG.
         let client = makeClient()
         client.start()
@@ -140,9 +154,12 @@ do {
         exit(0)
     }
 
-    // Live mode
+    // Live mode — the scene MUST be built on app.renderer: LKGApp owns its own
+    // QuiltRenderer (displayed texture), a second instance would silently split
+    // render targets and show black.
     let app = try LKGApp(spec: selectSpec(), renderScale: cli.renderScale)
     app.showPreview = cli.showPreview
+    let scene = try AIBlockCityScene(renderer: app.renderer, viewSize: cli.renderSize)
     let client = makeClient()
     let coordinator = AIQuiltCoordinator(scene: scene, renderer: app.renderer, client: client)
     coordinator.sceneTimeProvider = { app.currentTime() }
@@ -162,7 +179,10 @@ do {
     }
 
     app.onRenderQuilt = { cmd, _, time in coordinator.onFrame(cmd: cmd, time: time) }
+    // hold G: peek the raw raymarch (pre-diffusion); release: back to AI quilt
+    app.displaySourceOverride = { coordinator.rawPeek ? app.renderer.altQuiltTexture : nil }
     app.onKey = { key in
+        if key == "g" { coordinator.rawPeek = true; return true }
         if scene.handleKey(key) { return true }
         guard cli.audioSource == "music" else { return false }
         switch key {
@@ -171,6 +191,9 @@ do {
         case "N": music.previousTrack(); return true
         default: return false
         }
+    }
+    app.onKeyUp = { key in
+        if key == "g" { coordinator.rawPeek = false }
     }
     app.onStatusLine = {
         var s = coordinator.statusLine
@@ -197,6 +220,28 @@ do {
     app.onWillTerminate = { client.stopAll() }
     client.start()
     coordinator.start()
+
+    // headless peek self-test: LKG_PEEK_TEST=1 auto-engages raw peek and dumps
+    // the interlaced frame so the alt-quilt display path can be verified
+    // without a keyboard.
+    if ProcessInfo.processInfo.environment["LKG_PEEK_TEST"] != nil {
+        // baseline (main quilt) dumps before engaging peek
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            app.saveLenticular(to: "/tmp/peek-normal-lentic.png")
+            app.renderer.saveQuiltPNG(to: "/tmp/peek-normal-quilt.png") { _ in }
+            print("[peek-test] dumped normal baseline")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+            coordinator.rawPeek = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                app.saveLenticular(to: "/tmp/peek-live-lentic.png")
+                app.renderer.saveQuiltPNG(to: "/tmp/peek-live-altquilt.png",
+                                          source: app.renderer.altQuiltTexture) { _ in }
+                print("[peek-test] dumped lentic + altquilt")
+            }
+        }
+    }
+
     app.run()
 } catch {
     print("error: \(error)")

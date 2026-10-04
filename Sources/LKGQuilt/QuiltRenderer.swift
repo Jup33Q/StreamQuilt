@@ -23,6 +23,35 @@ public final class QuiltRenderer {
     /// rgba16Float quilt render target the scene renders into.
     public private(set) var quiltTexture: MTLTexture!
 
+    /// Optional second quilt target (same spec), e.g. for a raw/unprocessed
+    /// peek layer. Lazily created via `makeAltQuiltTarget()`.
+    public private(set) var altQuiltTexture: MTLTexture?
+
+    /// Lazily create/return the alternate quilt target (matches current renderScale).
+    @discardableResult
+    public func makeAltQuiltTarget() -> MTLTexture {
+        if let altQuiltTexture, altQuiltTexture.width == quiltTexture.width {
+            return altQuiltTexture
+        }
+        let d = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float, width: quiltTexture.width, height: quiltTexture.height,
+            mipmapped: false)
+        d.usage = [.renderTarget, .shaderRead]
+        d.storageMode = .private
+        let tex = device.makeTexture(descriptor: d)!
+        altQuiltTexture = tex
+        return tex
+    }
+
+    /// Pass descriptor onto the alternate quilt target.
+    public func makeAltQuiltPassDescriptor(loadAction: MTLLoadAction = .dontCare) -> MTLRenderPassDescriptor {
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = makeAltQuiltTarget()
+        pass.colorAttachments[0].loadAction = loadAction
+        pass.colorAttachments[0].storeAction = .store
+        return pass
+    }
+
     private let tonemapPSO: MTLRenderPipelineState
     private let lenticularPSO: MTLRenderPipelineState
     private let testPatternPSO: MTLRenderPipelineState
@@ -152,14 +181,20 @@ public final class QuiltRenderer {
     // MARK: - Fixed post passes
 
     /// Interlace the quilt for direct display on a Looking Glass panel.
+    /// `source` defaults to the main quilt; pass an alternate target for peek modes.
     public func encodeLenticular(cmd: MTLCommandBuffer, pass: MTLRenderPassDescriptor,
-                                 calibration: Calibration, drawableSize: SIMD2<Float>) {
+                                 calibration: Calibration, drawableSize: SIMD2<Float>,
+                                 source: MTLTexture? = nil,
+                                 overlay: MTLTexture? = nil, overlayShift: Float = 0) {
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.setRenderPipelineState(lenticularPSO)
-        enc.setFragmentTexture(quiltTexture, index: 0)
+        enc.setFragmentTexture(source ?? quiltTexture, index: 0)
+        enc.setFragmentTexture(overlay ?? source ?? quiltTexture, index: 1)
         var lp = calibration.lenticularUniforms(columns: spec.columns, rows: spec.rows)
         lp.screenW = drawableSize.x
         lp.screenH = drawableSize.y
+        lp.hasOverlay = overlay != nil ? 1 : 0
+        lp.overlayShift = overlayShift
         enc.setFragmentBytes(&lp, length: MemoryLayout<LenticularUniforms>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -167,10 +202,10 @@ public final class QuiltRenderer {
 
     /// Tonemapped copy of the quilt into any render pass (preview window, PNG export).
     public func encodeTonemappedBlit(cmd: MTLCommandBuffer, pass: MTLRenderPassDescriptor,
-                                     drawableSize: SIMD2<Float>) {
+                                     drawableSize: SIMD2<Float>, source: MTLTexture? = nil) {
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.setRenderPipelineState(tonemapPSO)
-        enc.setFragmentTexture(quiltTexture, index: 0)
+        enc.setFragmentTexture(source ?? quiltTexture, index: 0)
         var sz = drawableSize
         enc.setFragmentBytes(&sz, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
@@ -180,7 +215,8 @@ public final class QuiltRenderer {
     // MARK: - PNG export
 
     /// Render one frame via `encodeQuilt` and save the tonemapped quilt as PNG.
-    public func saveQuiltPNG(to path: String, encodeQuilt: (MTLCommandBuffer) -> Void) {
+    public func saveQuiltPNG(to path: String, source: MTLTexture? = nil,
+                             encodeQuilt: (MTLCommandBuffer) -> Void) {
         guard let cmd = commandQueue.makeCommandBuffer() else { return }
         encodeQuilt(cmd)
         let pass = MTLRenderPassDescriptor()
@@ -188,7 +224,8 @@ public final class QuiltRenderer {
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
         encodeTonemappedBlit(cmd: cmd, pass: pass,
-                             drawableSize: SIMD2(Float(spec.width), Float(spec.height)))
+                             drawableSize: SIMD2(Float(spec.width), Float(spec.height)),
+                             source: source)
         cmd.commit()
         cmd.waitUntilCompleted()
         writePNG(texture: ldrTexture, to: path)
@@ -198,6 +235,7 @@ public final class QuiltRenderer {
     /// Render one frame and save the interlaced panel image as PNG
     /// (for inspecting the optical transformation off-device).
     public func saveLenticularPNG(to path: String, calibration: Calibration,
+                                  source: MTLTexture? = nil,
                                   encodeQuilt: (MTLCommandBuffer) -> Void) {
         let w = Int(calibration.screenW), h = Int(calibration.screenH)
         let d = MTLTextureDescriptor.texture2DDescriptor(
@@ -212,7 +250,7 @@ public final class QuiltRenderer {
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
         encodeLenticular(cmd: cmd, pass: pass, calibration: calibration,
-                         drawableSize: SIMD2(Float(w), Float(h)))
+                         drawableSize: SIMD2(Float(w), Float(h)), source: source)
         cmd.commit()
         cmd.waitUntilCompleted()
         writePNG(texture: tex, to: path)

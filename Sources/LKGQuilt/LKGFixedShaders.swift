@@ -13,6 +13,8 @@ enum LKGFixedShaders {
     // Uniform block mirroring LenticularUniforms (Swift).
     struct LKGLenticularParams {
         float pitch, tilt, center, subp, invView, tilesX, tilesY, screenW, screenH;
+        float overlayShift;  // full-sweep shift as fraction of screen width
+        float hasOverlay;
     };
 
     struct LKGTestPatternParams {
@@ -60,7 +62,8 @@ enum LKGFixedShaders {
     /// v is top-down, so the quilt sample flips v at the end.
     fragment float4 lkgLenticularFS(float4 fpos [[position]],
                                     constant LKGLenticularParams& LP [[buffer(0)]],
-                                    texture2d<float> quilt [[texture(0)]]) {
+                                    texture2d<float> quilt [[texture(0)]],
+                                    texture2d<float> overlay [[texture(1)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float2 uv = float2(fpos.x / LP.screenW, 1.0 - fpos.y / LP.screenH); // GL-style, y up
         float3 outCol;
@@ -74,6 +77,14 @@ enum LKGFixedShaders {
             float2 q = float2((tx + uv.x) / LP.tilesX, (ty + uv.y) / LP.tilesY);
             q.y = 1.0 - q.y; // Metal texture v flip
             outCol[i] = lkgTonemap(quilt.sample(s, q).rgb)[i];
+
+            // lyric/overlay layer: per-view parallax shift (z sweeps views),
+            // sampled in screen space; overlay texture is Metal-native (top-down).
+            if (LP.hasOverlay > 0.5) {
+                float2 ouv = float2(uv.x + (z - 0.5) * LP.overlayShift, 1.0 - uv.y);
+                float4 ov = overlay.sample(s, ouv, level(0));
+                outCol[i] = mix(outCol[i], ov[i], ov.a);
+            }
         }
         return float4(outCol, 1.0);
     }

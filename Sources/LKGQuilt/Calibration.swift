@@ -2,7 +2,7 @@ import Foundation
 import simd
 
 /// Uniform block consumed by the lenticular interlace shader.
-/// Layout must match `LKGLenticularParams` in Shaders/LKGQuilt.metal.
+/// Layout must match `LKGLenticularParams` in LKGFixedShaders.
 public struct LenticularUniforms {
     public var pitch: Float = 0
     public var tilt: Float = 0
@@ -13,6 +13,11 @@ public struct LenticularUniforms {
     public var tilesY: Float = 6
     public var screenW: Float = 1440
     public var screenH: Float = 2560
+    /// Full-sweep horizontal shift of the overlay layer, as a fraction of screen
+    /// width. Positive pops the overlay out of the screen (flip sign to recess).
+    public var overlayShift: Float = 0
+    /// 1 when an overlay texture is bound.
+    public var hasOverlay: Float = 0
 
     public init() {}
 }

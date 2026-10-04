@@ -162,3 +162,15 @@ Swift CoreAIRuntime 加载 ✓，NDArray 支持 MTLBuffer 零拷贝）。
 - **多实例是性能杀手**：多个 app 实例在同一块 LKG 屏各开无边框窗会把 display link
   拖到 ~2.7Hz。起新实例前 `ps aux | grep lkg-ai-demo` 清干净；TaskStop 只杀 bash 壳，
   Swift 进程要用 exec 直挂或显式 kill。
+
+## G 键 peek 与浮层地基（2026-10-04 固化）
+
+- 按住 G = 原始 raymarch（alt quilt 纹理 + LKGApp.displaySourceOverride 切换采样源），
+  松开复原；退出是 Cmd+Q（q 已让位）。库侧：QuiltRenderer.altQuiltTexture /
+  makeAltQuiltPassDescriptor / encodeLenticular(source:overlay:overlayShift:)。
+- **双 QuiltRenderer 黑屏教训**：LKGApp 自建 renderer；live 模式场景必须用
+  `app.renderer` 构建，否则场景渲进A纹理、屏幕读B纹理=黑屏。lkg-ai-demo 曾中招。
+- 歌词浮层地基（overlayShift/hasOverlay + interlace 内视差采样）已入库未接线，
+  续作见 docs/lyrics-and-peek-plan.md。
+- 调试技巧：LKG_PEEK_TEST=1 环境变量可让 app 自动进 peek 并落盘 interlace PNG，
+  无需手动按键即可验证显示路径。

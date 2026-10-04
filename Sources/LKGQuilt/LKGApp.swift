@@ -31,6 +31,10 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
     public var onStatusLine: (() -> String)?
     /// Called from applicationWillTerminate — release external resources (e.g. child processes).
     public var onWillTerminate: (() -> Void)?
+    /// Key-up handler (for hold-to-peek style interactions).
+    public var onKeyUp: ((String) -> Void)?
+    /// When non-nil, device + preview display this quilt texture instead of the main one.
+    public var displaySourceOverride: (() -> MTLTexture?)?
 
     public var showPreview = true
     /// Show the raw quilt on the device instead of the interlaced image (key: b).
@@ -114,7 +118,7 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
         if showPreview {
             let pw = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 460, height: 460),
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
-            pw.title = "LKG quilt preview — q quit · s save · b bypass · c calib-test · p pause · 1/2 res"
+            pw.title = "LKG quilt preview — Cmd-Q quit · s save · b bypass · c calib-test · p pause · 1/2 res"
             let pv = MTKView(frame: pw.contentView!.bounds, device: renderer.device)
             pv.autoresizingMask = [.width, .height]
             pv.colorPixelFormat = .bgra8Unorm
@@ -131,6 +135,11 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
             guard let self, let chars = ev.charactersIgnoringModifiers else { return ev }
             self.handleKey(chars)
+            return ev
+        }
+        NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] ev in
+            guard let self, let chars = ev.charactersIgnoringModifiers else { return ev }
+            self.onKeyUp?(chars)
             return ev
         }
     }
@@ -153,7 +162,7 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
 
     private func handleKey(_ key: String) {
         switch key {
-        case "q": NSApp.terminate(nil)
+        // 'q' is free for scenes (hold-to-peek); quit via Cmd+Q menu.
         case "p":
             if paused { startTime = CACurrentMediaTime() - CFTimeInterval(pauseBase) }
             else { pauseBase = currentTime() }
@@ -181,7 +190,8 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
 
     public func saveLenticular(to path: String) {
         let t = currentTime()
-        renderer.saveLenticularPNG(to: path, calibration: calibration) { cmd in
+        renderer.saveLenticularPNG(to: path, calibration: calibration,
+                                   source: displaySourceOverride?() ?? nil) { cmd in
             self.encodeScene(cmd: cmd, time: t)
         }
     }
@@ -228,11 +238,12 @@ private final class FrameDriver: NSObject, MTKViewDelegate {
             cmd1.commit()
 
             let cmd2 = r.commandQueue.makeCommandBuffer()!
+            let src = app.displaySourceOverride?()
             if app.bypassLenticular {
-                r.encodeTonemappedBlit(cmd: cmd2, pass: rpd, drawableSize: destSize)
+                r.encodeTonemappedBlit(cmd: cmd2, pass: rpd, drawableSize: destSize, source: src)
             } else {
                 r.encodeLenticular(cmd: cmd2, pass: rpd, calibration: app.calibration,
-                                   drawableSize: destSize)
+                                   drawableSize: destSize, source: src)
             }
             cmd2.present(drawable)
             cmd2.addCompletedHandler { [weak self] cb in
@@ -246,7 +257,8 @@ private final class FrameDriver: NSObject, MTKViewDelegate {
                   let rpd = view.currentRenderPassDescriptor,
                   let drawable = view.currentDrawable else { return }
             if app.deviceDriverExists == false { app.encodeScene(cmd: cmd, time: t) }
-            r.encodeTonemappedBlit(cmd: cmd, pass: rpd, drawableSize: destSize)
+            r.encodeTonemappedBlit(cmd: cmd, pass: rpd, drawableSize: destSize,
+                                   source: app.displaySourceOverride?())
             cmd.present(drawable)
             cmd.commit()
             if app.deviceDriverExists == false { report() }

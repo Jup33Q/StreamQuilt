@@ -23,6 +23,12 @@ final class AIQuiltCoordinator {
     private var lastAppliedAt: [Double]
     private var started = false
 
+    /// Hold-to-peek: while true, the raw raymarch renders into the alt quilt
+    /// every frame and the display samples that instead of the AI quilt.
+    var rawPeek = false {
+        didSet { print("[peek] rawPeek = \(rawPeek)") }
+    }
+
     // diagnostics
     private var dispatchCount = 0
     private var dispatchWindowStart = Date()
@@ -60,12 +66,14 @@ final class AIQuiltCoordinator {
         }
     }
 
-    /// Display-frame hook: only the base layer (1/6 rate) + a cheap dispatch
-    /// fallback in case the event chain ever stalls.
+    /// Display-frame hook: raw peek renders every frame into the alt quilt;
+    /// otherwise the base layer re-primes at 1/6 rate + dispatch fallback.
     func onFrame(cmd: MTLCommandBuffer, time: Float) {
         let t0 = CACurrentMediaTime()
         frameCount += 1
-        if frameCount % 6 == 1 {
+        if rawPeek {
+            scene.encodeBase(cmd: cmd, time: time, into: renderer.makeAltQuiltTarget())
+        } else if frameCount % 6 == 1 {
             scene.encodeBase(cmd: cmd, time: time)
         }
         dispatchIdle()
