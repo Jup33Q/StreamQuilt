@@ -144,8 +144,9 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
 
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] ev in
             guard let self, let chars = ev.charactersIgnoringModifiers else { return ev }
-            self.handleKey(chars)
-            return ev
+            // consume handled keys — returning ev for a handled key makes
+            // AppKit play the "invalid input" beep (reported on hold-G peek)
+            return self.handleKey(chars) ? nil : ev
         }
         NSEvent.addLocalMonitorForEvents(matching: .keyUp) { [weak self] ev in
             guard let self, let chars = ev.charactersIgnoringModifiers else { return ev }
@@ -170,7 +171,8 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
 
     // MARK: - Keys
 
-    private func handleKey(_ key: String) {
+    /// Returns true when the key was consumed (built-in action or custom handler).
+    private func handleKey(_ key: String) -> Bool {
         switch key {
         // 'q' is free for scenes (hold-to-peek); quit via Cmd+Q menu.
         case "p":
@@ -187,8 +189,9 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
         case "c": testPattern.toggle(); print("testPattern = \(testPattern)")
         case "1": renderer.renderScale = 1.0
         case "2": renderer.renderScale = 0.5
-        default: _ = onKey?(key)
+        default: return onKey?(key) ?? false
         }
+        return true
     }
 
     // MARK: - Snapshot
