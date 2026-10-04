@@ -10,6 +10,8 @@ import Foundation
 /// From BPM + position we synthesize a beat clock that drives shader uniforms.
 final class MusicBridge {
     private(set) var line = ""        // "name — artist"
+    private(set) var trackName = ""
+    private(set) var artist = ""
     private(set) var bpm = 0
     private(set) var playing = false
     private(set) var duration: Double = 0
@@ -75,7 +77,7 @@ final class MusicBridge {
                 tell application "Music"
                     if player state is playing or player state is paused then
                         set t to current track
-                        return (player state as string) & "|" & player position & "|" & (time of t) & "|" & (name of t) & " — " & (artist of t) & "|" & (bpm of t)
+                        return (player state as string) & "|" & player position & "|" & (time of t) & "|" & (name of t) & "|" & (artist of t) & "|" & (bpm of t)
                     end if
                 end tell
                 """) else { return }
@@ -84,16 +86,19 @@ final class MusicBridge {
                 guard let self else { return }
                 if s.isEmpty {
                     self.playing = false; self.line = ""; self.bpm = 0
+                    self.trackName = ""; self.artist = ""
                     return
                 }
                 let p = s.split(separator: "|").map(String.init)
-                guard p.count >= 5 else { return }
+                guard p.count >= 6 else { return }
                 self.playing = p[0] == "playing"
                 self.positionAtPoll = Double(p[1]) ?? 0
                 self.lastPollAt = Date()
                 self.duration = Self.parseMMSS(p[2])
-                self.line = p[3]
-                self.bpm = Int(p[4]) ?? 0
+                self.trackName = p[3]
+                self.artist = p[4]
+                self.line = p[3] + " — " + p[4]
+                self.bpm = Int(p[5]) ?? 0
             }
         }
     }

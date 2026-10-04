@@ -38,6 +38,7 @@ struct CLI {
     var beatEpoch = true        // N4 epoch 边界对齐节拍（每 2 拍一个 epoch）
     var altMix: Float = 0       // 常驻原始层混合比（0-1；G 键按住时平滑推到 1）
     var beatGlow: Float = 0.25  // AI 层显示级节拍脉冲幅度（0=关；interlace 内主 quilt 增益）
+    var lyricPrompt = true      // L3 歌词行热调制 prompt（--no-lyric-prompt 关）
     var grid = "7x8"   // AI 路径默认 7x8=56（低算力布局）；11x6 为全规格 66
     var units = ""     // 逗号分隔，如 "all,cpu_and_gpu"；空 = 异构默认
     var audioSource = "music"   // music（Apple Music 节拍钟，默认）| mic | none
@@ -73,6 +74,8 @@ while i < args.count {
     case "--no-beat-epoch": cli.beatEpoch = false
     case "--alt-mix": cli.altMix = Float(args[i + 1]) ?? 0; i += 1
     case "--beat-glow": cli.beatGlow = Float(args[i + 1]) ?? 0.25; i += 1
+    case "--lyric-prompt": cli.lyricPrompt = true
+    case "--no-lyric-prompt": cli.lyricPrompt = false
     case "--grid": cli.grid = args[i + 1]; i += 1
     case "--units": cli.units = args[i + 1]; i += 1
     case "--audio-source": cli.audioSource = args[i + 1]; i += 1
@@ -197,12 +200,32 @@ do {
     // audio-reactive: Apple Music beat clock (default) or mic FFT (--audio-source mic)
     let music = MusicBridge()
     let analyzer = AudioAnalyzer()
+    let lyrics = LyricsService()
     if cli.audioSource == "music" {
         scene.audioProvider = { music.features }
         music.start()
         // N4: epoch boundaries aligned to every 2nd beat
         if cli.beatEpoch {
             coordinator.beatClockProvider = { music.beatClock }
+        }
+        // L3: lyric line change -> hot prompt modulation (throttled in
+        // LyricsService; here we snap the switch to the next beat boundary
+        // when one is near, so the style drift lands on the beat grid).
+        lyrics.attach(music: music) { line in
+            guard cli.lyricPrompt else { return }
+            let composed = cli.prompt + ", " + String(line.prefix(60))
+            let apply = {
+                client.setPrompt(composed)
+                print("[lyric-prompt] “\(line.prefix(60))”")
+            }
+            if let bc = music.beatClock {
+                let toNextBeat = (1 - (bc.phase - bc.phase.rounded(.down))) * bc.beatLen
+                if toNextBeat > 0.1, toNextBeat < 1.5 {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + toNextBeat) { apply() }
+                    return
+                }
+            }
+            apply()
         }
     } else if cli.audioSource == "mic" {
         scene.audioProvider = {
@@ -249,6 +272,9 @@ do {
             s += String(format: " | ♫ beat %.2f", f.w)
             if !music.line.isEmpty {
                 s += " | ♪ " + music.line + (music.bpm > 0 ? " \(music.bpm)bpm" : "")
+                if !lyrics.currentLine.isEmpty {
+                    s += " | “" + String(lyrics.currentLine.prefix(32)) + "”"
+                }
             } else {
                 s += " | ♪ (Music not playing)"
             }

@@ -198,6 +198,11 @@ Apple Music's PCM is DRM-protected — MusicKit cannot hand us audio buffers. In
   AppleScript (track/artist/BPM field/player position), synthesizes a beat clock from
   BPM (100 BPM fallback) + extrapolated position → shader uniforms (bass/mid/treble/beat).
   Keys: `space` play/pause · `n` next · `N` previous (Music.app control).
+  - **Lyric-driven prompts** (`--lyric-prompt`, default on): `LyricsService` fetches
+    synced lyrics (Music.app lyrics field → LRCLIB fallback), and each line change is
+    appended to the base prompt via the workers' live `setPrompt`, throttled ≥2s and
+    snapped to the next beat boundary — the rolling tile wave picks up lyric semantics
+    in time with the music. The status line shows the current lyric line.
 - **`AudioAnalyzer`** (`--audio-source mic`): real mic FFT (AVAudioEngine + vDSP),
   band energies + spectral-flux onsets — works with any audible source.
   Requires the app-bundled build for the mic permission prompt:
