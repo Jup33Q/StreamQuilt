@@ -28,16 +28,21 @@ final class AIBlockCityScene {
 
     struct BaseParams {
         var tileSize: SIMD2<Float>
+        var audio: SIMD4<Float>
         var cols: Float; var rows: Float; var time: Float
         var size: Float; var flip: Float; var dist: Float; var camH: Float
         var fovTan: Float; var pitch: Float; var aspect: Float
     }
 
     struct ViewParams {
+        var audio: SIMD4<Float>
         var time: Float; var viewT: Float; var size: Float; var flip: Float
         var dist: Float; var camH: Float; var fovTan: Float; var pitch: Float
         var renderSize: Float
     }
+
+    /// Supplies (bass, mid, treble, beat) each encode; nil = silence.
+    var audioProvider: (() -> SIMD4<Float>)?
 
     init(renderer: QuiltRenderer, viewSize: Int = 512, stagingCount: Int = 8) throws {
         self.renderer = renderer
@@ -77,6 +82,7 @@ final class AIBlockCityScene {
         var p = BaseParams(
             tileSize: SIMD2(Float(target.width) / Float(spec.columns),
                             Float(target.height) / Float(spec.rows)),
+            audio: audioProvider?() ?? .zero,
             cols: Float(spec.columns), rows: Float(spec.rows), time: t,
             size: sweep, flip: flip, dist: dist, camH: camH,
             fovTan: tan(fovY / 2), pitch: pitch, aspect: spec.tileAspect)
@@ -94,6 +100,7 @@ final class AIBlockCityScene {
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.setRenderPipelineState(viewPSO)
         var p = ViewParams(
+            audio: audioProvider?() ?? .zero,
             time: time * timeScale,
             viewT: Float(viewIndex) / Float(renderer.spec.viewCount - 1),
             size: sweep, flip: flip, dist: dist, camH: camH,

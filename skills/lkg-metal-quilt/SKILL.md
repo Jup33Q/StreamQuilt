@@ -150,3 +150,15 @@ Swift CoreAIRuntime 加载 ✓，NDArray 支持 MTLBuffer 零拷贝）。
 - `scripts/coreml_spike.swift` — 纯 Swift+CoreML img2img 链路验证
 - `scripts/coreai_smoke_test.py` — coreai-torch 转换 + coreai.runtime 加载验证
 - `docs/coreai-migration.md` — CoreAI/CoreML Swift 迁移可行性备忘录
+
+## 音画互动（2026-10-04 固化）
+
+- **Apple Music PCM 是 DRM 保护的，MusicKit 拿不到音频流**。联动走 Music.app AppleScript：
+  Now Playing 元数据（曲名/艺人/BPM 字段）+ 播放器位置外推 → 合成节拍钟驱动 shader
+  uniform（bass/mid/treble/beat）。控制键：space 播放暂停 / n 下一首 / N 上一首。
+  真音频分析走 `--audio-source mic`（AVAudioEngine+vDSP FFT，需 .app bundle 拿 TCC 权限：
+  `bash scripts/build_app.sh`）。
+- AppleScript 多行字符串里换行续接是 `¬` 不是 `\`（`\` 会语法错误，静默拿不到数据）。
+- **多实例是性能杀手**：多个 app 实例在同一块 LKG 屏各开无边框窗会把 display link
+  拖到 ~2.7Hz。起新实例前 `ps aux | grep lkg-ai-demo` 清干净；TaskStop 只杀 bash 壳，
+  Swift 进程要用 exec 直挂或显式 kill。

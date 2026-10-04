@@ -6,10 +6,12 @@ extension AIBlockCityScene {
     static let sceneMSL = """
     struct AIBaseParams {
         float2 tileSize;
+        float4 audio;   // bass, mid, treble, beat (AudioAnalyzer)
         float cols, rows, time, size, flip, dist, camH, fovTan, pitch, aspect;
     };
 
     struct AIViewParams {
+        float4 audio;
         float time, viewT, size, flip, dist, camH, fovTan, pitch, renderSize;
     };
 
@@ -35,7 +37,7 @@ extension AIBlockCityScene {
         return length(max(q, float3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
     }
 
-    static float2 map(float3 p, float t) {
+    static float2 map(float3 p, float t, float4 audio) {
         float2 res = float2(p.y, 0.0);
         float c = 2.2;
         float2 id = floor(p.xz / c);
@@ -43,12 +45,16 @@ extension AIBlockCityScene {
         float2 idw = id - floor(id / 64.0) * 64.0;
         float h0 = hash21(idw);
         float wave = sin(t * 1.6 - length(id) * 0.55 + h0 * 6.2831) * 0.5 + 0.5;
-        float h = (0.25 + 2.6 * h0) * (0.55 + 0.45 * wave);
+        // bass pumps block heights, treble sharpens the pulse
+        float pump = 0.65 + audio.x * 1.4;
+        float h = (0.25 + 2.6 * h0) * (0.55 + 0.45 * wave) * pump;
         float dB = sdBox(float3(r.x, p.y - h * 0.5, r.y), float3(0.55, h * 0.5, 0.55)) - 0.04;
         if (dB < res.x) res = float2(dB, 1.0 + h0);
 
+        // beat makes the orbit cube jump
+        float jump = audio.w * 1.2;
         float a = t * 0.6;
-        float3 q2 = p - float3(cos(a) * 3.4, 2.4 + sin(t * 0.9) * 0.6, sin(a) * 3.4 - 1.5);
+        float3 q2 = p - float3(cos(a) * 3.4, 2.4 + sin(t * 0.9) * 0.6 + jump, sin(a) * 3.4 - 1.5);
         float cr = cos(t * 0.8), sr = sin(t * 0.8);
         q2 = float3(q2.x * cr - q2.z * sr, q2.y, q2.x * sr + q2.z * cr);
         float cq = cos(t * 0.5), sq = sin(t * 0.5);
@@ -64,12 +70,12 @@ extension AIBlockCityScene {
         return float3(0.15, 0.2, 0.3);
     }
 
-    static float3 calcNormal(float3 p, float t) {
+    static float3 calcNormal(float3 p, float t, float4 audio) {
         float2 e = float2(0.0015, -0.0015);
-        return normalize(e.xyy * map(p + e.xyy, t).x +
-                         e.yyx * map(p + e.yyx, t).x +
-                         e.yxy * map(p + e.yxy, t).x +
-                         e.xxx * map(p + e.xxx, t).x);
+        return normalize(e.xyy * map(p + e.xyy, t, audio).x +
+                         e.yyx * map(p + e.yyx, t, audio).x +
+                         e.yxy * map(p + e.yxy, t, audio).x +
+                         e.xxx * map(p + e.xxx, t, audio).x);
     }
 
     static float3 aces(float3 c) {
@@ -78,14 +84,15 @@ extension AIBlockCityScene {
         return pow(c, float3(1.0 / 2.2));
     }
 
-    static float3 shadeScene(float3 ro, float3 dir, float2 ndc, float time) {
+    static float3 shadeScene(float3 ro, float3 dir, float2 ndc, float time, float4 audio) {
         float tRay = 0.0;
         float m = -1.0;
         float3 glow = float3(0.0);
         for (int i = 0; i < 90; i++) {
             float3 p = ro + dir * tRay;
-            float2 dm = map(p, time);
-            glow += palette(dm.y, time) * exp(-max(dm.x, 0.0) * 9.0) * 0.005;
+            float2 dm = map(p, time, audio);
+            // beat flash amplifies near-miss glow
+            glow += palette(dm.y, time) * exp(-max(dm.x, 0.0) * 9.0) * 0.005 * (1.0 + audio.w * 2.5);
             if (dm.x < 0.0012 * tRay + 0.0006) { m = dm.y; break; }
             tRay += dm.x * 0.9;
             if (tRay > 80.0) break;
@@ -93,14 +100,15 @@ extension AIBlockCityScene {
 
         float3 sky = mix(float3(0.02, 0.03, 0.07), float3(0.05, 0.10, 0.22), pow(max(dir.y, 0.0), 0.6));
         sky += float3(0.10, 0.20, 0.50) * pow(max(1.0 - abs(dir.y), 0.0), 6.0) * 0.35;
+        sky *= 1.0 + audio.w * 0.6; // beat sky pulse
 
         float3 colOut;
         if (m < -0.5) {
             colOut = sky;
         } else {
             float3 p = ro + dir * tRay;
-            float3 n = calcNormal(p, time);
-            float3 base = palette(m, time);
+            float3 n = calcNormal(p, time, audio);
+            float3 base = palette(m, time + audio.z * 3.0); // treble shifts palette
             if (m < 0.5) {
                 float2 g = abs(fract(p.xz / 2.2) - 0.5);
                 float line = smoothstep(0.465, 0.5, max(g.x, g.y));
@@ -128,7 +136,7 @@ extension AIBlockCityScene {
         float off = lkgViewOffset(ti.viewT, P.size, P.flip);
         float3 ro = float3(off, P.camH, P.dist);
         float3 dir = lkgViewRay(ti, off, P.dist, P.fovTan, P.aspect, P.pitch);
-        return float4(shadeScene(ro, dir, ti.tileNDC, P.time), 1.0);
+        return float4(shadeScene(ro, dir, ti.tileNDC, P.time, P.audio), 1.0);
     }
 
     // Single-view LDR render (square staging) as diffusion img2img input.
@@ -142,7 +150,7 @@ extension AIBlockCityScene {
         float3 dir = normalize(float3(ndc.x * P.fovTan, ndc.y * P.fovTan, -1.0));
         float cp = cos(P.pitch), sp = sin(P.pitch);
         dir = float3(dir.x, dir.y * cp + dir.z * sp, -dir.y * sp + dir.z * cp);
-        return float4(aces(shadeScene(ro, dir, ndc, P.time)), 1.0);
+        return float4(aces(shadeScene(ro, dir, ndc, P.time, P.audio)), 1.0);
     }
     """
 }

@@ -29,6 +29,7 @@ struct CLI {
     var batch = 1
     var grid = "7x8"   // AI 路径默认 7x8=56（低算力布局）；11x6 为全规格 66
     var units = ""     // 逗号分隔，如 "all,cpu_and_gpu"；空 = 异构默认
+    var audioSource = "music"   // music（Apple Music 节拍钟，默认）| mic | none
     var python = NSString(string: "~/Documents/kimi/workspace/streamdiffusion-mac/.venv/bin/python").expandingTildeInPath
     var script = ""
     var models = ""
@@ -56,6 +57,7 @@ while i < args.count {
     case "--batch": cli.batch = Int(args[i + 1]) ?? 1; i += 1
     case "--grid": cli.grid = args[i + 1]; i += 1
     case "--units": cli.units = args[i + 1]; i += 1
+    case "--audio-source": cli.audioSource = args[i + 1]; i += 1
     case "--python": cli.python = args[i + 1]; i += 1
     case "--script": cli.script = args[i + 1]; i += 1
     case "--models": cli.models = args[i + 1]; i += 1
@@ -144,9 +146,50 @@ do {
     let client = makeClient()
     let coordinator = AIQuiltCoordinator(scene: scene, renderer: app.renderer, client: client)
     coordinator.sceneTimeProvider = { app.currentTime() }
+
+    // audio-reactive: Apple Music beat clock (default) or mic FFT (--audio-source mic)
+    let music = MusicBridge()
+    let analyzer = AudioAnalyzer()
+    if cli.audioSource == "music" {
+        scene.audioProvider = { music.features }
+        music.start()
+    } else if cli.audioSource == "mic" {
+        scene.audioProvider = {
+            let f = analyzer.current
+            return SIMD4(f.bass, f.mid, f.treble, f.beat)
+        }
+        analyzer.start()
+    }
+
     app.onRenderQuilt = { cmd, _, time in coordinator.onFrame(cmd: cmd, time: time) }
-    app.onKey = { scene.handleKey($0) }
-    app.onStatusLine = { coordinator.statusLine }
+    app.onKey = { key in
+        if scene.handleKey(key) { return true }
+        guard cli.audioSource == "music" else { return false }
+        switch key {
+        case " ": music.togglePlayPause(); return true
+        case "n": music.nextTrack(); return true
+        case "N": music.previousTrack(); return true
+        default: return false
+        }
+    }
+    app.onStatusLine = {
+        var s = coordinator.statusLine
+        switch cli.audioSource {
+        case "music":
+            let f = music.features
+            s += String(format: " | ♫ beat %.2f", f.w)
+            if !music.line.isEmpty {
+                s += " | ♪ " + music.line + (music.bpm > 0 ? " \(music.bpm)bpm" : "")
+            } else {
+                s += " | ♪ (Music not playing)"
+            }
+        case "mic":
+            let f = analyzer.current
+            s += String(format: " | ♫ b%.2f m%.2f t%.2f bt%.2f", f.bass, f.mid, f.treble, f.beat)
+        default: break
+        }
+        return s
+    }
     // clean up workers no matter how we exit (TaskStop/SIGINT orphan them otherwise)
     gDiffusionClient = client
     signal(SIGTERM) { _ in gDiffusionClient?.stopAll(); exit(0) }

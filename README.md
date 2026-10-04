@@ -174,6 +174,23 @@ Status line reads per-tile refresh: `tile 1.38 Hz avg` = mean per-view update
 rate (`tiles/s ÷ viewCount`) — the metric that matters for the rolling-update
 quilt, since the display itself always runs at 60 Hz.
 
+### Audio-reactive (Apple Music linkage)
+
+Apple Music's PCM is DRM-protected — MusicKit cannot hand us audio buffers. Instead:
+
+- **`MusicBridge`** (default, `--audio-source music`): reads Music.app Now Playing via
+  AppleScript (track/artist/BPM field/player position), synthesizes a beat clock from
+  BPM (100 BPM fallback) + extrapolated position → shader uniforms (bass/mid/treble/beat).
+  Keys: `space` play/pause · `n` next · `N` previous (Music.app control).
+- **`AudioAnalyzer`** (`--audio-source mic`): real mic FFT (AVAudioEngine + vDSP),
+  band energies + spectral-flux onsets — works with any audible source.
+  Requires the app-bundled build for the mic permission prompt:
+  `bash scripts/build_app.sh`, then run `.build/LKG-AI-Demo.app/Contents/MacOS/lkg-ai-demo`.
+
+Shader effects: bass pumps block heights, beat flashes glow/sky and jumps the orbit
+cube, treble shifts the palette. Diffusion inputs get the same uniforms, so AI tiles
+inherit the audio sync.
+
 ### Migration tracks (M3/M4 conclusions)
 
 - **CoreML-in-Swift works**: `scripts/coreml_spike.swift` runs the full img2img
