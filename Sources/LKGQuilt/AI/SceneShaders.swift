@@ -18,17 +18,21 @@ import Foundation
 /// behind the focus plane at (2.2, 4.8, -8) — angular radius ~4.3° ≈ 1/3 of
 /// the half-frame; shell stepping never clips the fractal (shell 2.0 > extent
 /// ~1.6). Columns live in the z ∈ [-18, 8] band around the focus plane.
+/// Emotion engine: `theme` uniform = (hueBias, crystalGain, columnGain,
+/// emberGain); default (0,1,1,1) is bitwise-neutral.
 extension AIBlockCityScene {
     static let sceneMSL = """
     struct AIBaseParams {
         float2 tileSize;
         float4 audio;   // bass, mid, treble, beat
         float cols, rows, time, size, flip, dist, camH, fovTan, pitch, aspect;
+        float4 theme;   // emotion engine: hueBias, crystalGain, columnGain, emberGain
     };
 
     struct AIViewParams {
         float4 audio;
         float time, viewT, size, flip, dist, camH, fovTan, pitch, renderSize;
+        float4 theme;
     };
 
     vertex float4 aiSceneVS(uint vid [[vertex_id]]) {
@@ -126,7 +130,7 @@ extension AIBlockCityScene {
     /// plane (z=0) so the pillars sit at readable 3D depth: hashed cells, each
     /// column bound to bass/mid/treble by hash -> equalizer-pillar forest.
     /// Returns (capped-cylinder dist, cellHash, bandValue, topY).
-    static float4 columnField(float3 p, float t, float4 audio) {
+    static float4 columnField(float3 p, float t, float4 audio, float4 theme) {
         if (abs(p.x) < 2.4 || p.y > 12.0 || p.z < -18.0 || p.z > 8.0) {
             return float4(1e5, 0.0, 0.0, 0.0);
         }
@@ -137,19 +141,20 @@ extension AIBlockCityScene {
                   + float2(hash21(cell + 3.1), hash21(cell + 5.7)) * 1.4 - 0.7;
         float band = hc < 0.55 ? audio.x : (hc < 0.75 ? audio.y : audio.z);
         float hgt = 0.8 + hc * 3.0 + band * (1.5 + hc * 3.5);
+        hgt *= theme.z;                                // emotion: column strength
         float top = terrainH(cc, t, audio) + hgt;
         float d = max(length(p.xz - cc) - 0.5, p.y - top);
         return float4(d, hc, band, top);
     }
 
     // returns (dist, materialId): 0 = terrain, 2 = sun, 3 = crystal, 4 = column
-    static float2 map(float3 p, float t, float4 audio) {
+    static float2 map(float3 p, float t, float4 audio, float4 theme) {
         float2 res = float2((p.y - terrainH(p.xz, t, audio)) * 0.55, 0.0);
         float sunR = 2.1 * (1.0 + audio.x * 0.22 + audio.w * 0.10);
         float dSun = length(p - float3(0.0, 6.0, -24.0)) - sunR;
         if (dSun < res.x) res = float2(dSun, 2.0);
         // equalizer columns (single nearest cell — radius < half spacing)
-        float4 col = columnField(p, t, audio);
+        float4 col = columnField(p, t, audio, theme);
         if (col.x < res.x) res = float2(col.x, 4.0);
         // crystal: shell radius (2.0) comfortably exceeds the fractal extent
         // (/1.2 local scale -> ~1.6 world), so no clipping flat cap; outside
@@ -165,12 +170,12 @@ extension AIBlockCityScene {
         return res;
     }
 
-    static float3 calcNormal(float3 p, float t, float4 audio) {
+    static float3 calcNormal(float3 p, float t, float4 audio, float4 theme) {
         float2 e = float2(0.002, -0.002);
-        return normalize(e.xyy * map(p + e.xyy, t, audio).x +
-                         e.yyx * map(p + e.yyx, t, audio).x +
-                         e.yxy * map(p + e.yxy, t, audio).x +
-                         e.xxx * map(p + e.xxx, t, audio).x);
+        return normalize(e.xyy * map(p + e.xyy, t, audio, theme).x +
+                         e.yyx * map(p + e.yyx, t, audio, theme).x +
+                         e.yxy * map(p + e.yxy, t, audio, theme).x +
+                         e.xxx * map(p + e.xxx, t, audio, theme).x);
     }
 
     static float3 aces(float3 c) {
@@ -179,12 +184,13 @@ extension AIBlockCityScene {
         return pow(c, float3(1.0 / 2.2));
     }
 
-    static float3 shadeScene(float3 ro, float3 dir, float2 ndc, float time, float4 audio) {
+    static float3 shadeScene(float3 ro, float3 dir, float2 ndc, float time, float4 audio, float4 theme) {
         // CLASH palette: complementary hue pairs orbit the wheel together with
         // the music (mid/treble = big swing, beat = fast kick), per-element
         // multipliers make layers land on different hues for extra clash
         float hueShift = audio.y * 0.33 + audio.z * 0.18 + audio.w * 0.15
                        + sin(time * 0.07) * 0.06;
+        hueShift += theme.x;                            // emotion: hue re-anchor
         float satPop = min(1.0 + audio.w * 0.3, 1.0);       // beat saturation snap
 
         // mid -> gentle camera sway, beat -> small bob
@@ -195,7 +201,7 @@ extension AIBlockCityScene {
         float m = -1.0;
         for (int i = 0; i < 110; i++) {
             float3 p = ro + dir * tRay;
-            float2 dm = map(p, time, audio);
+            float2 dm = map(p, time, audio, theme);
             if (dm.x < 0.0015 * tRay + 0.001) { m = dm.y; break; }
             tRay += dm.x * 0.95;
             if (tRay > 70.0) break;
@@ -224,8 +230,8 @@ extension AIBlockCityScene {
         } else if (m > 3.5) {
             // equalizer column: dark basalt body + neon cap riding its audio band
             float3 p = ro + dir * tRay;
-            float3 n = calcNormal(p, time, audio);
-            float4 col = columnField(p, time, audio);   // re-fetch cell params
+            float3 n = calcNormal(p, time, audio, theme);
+            float4 col = columnField(p, time, audio, theme);   // re-fetch cell params
             float hc = col.y, band = col.z, top = col.w;
             float3 L = normalize(float3(0.0, 0.5, -0.8));
             float dif = max(dot(n, L), 0.0);
@@ -245,7 +251,7 @@ extension AIBlockCityScene {
             // mandelbox crystal: diffuse key light + one-tap AO give it volume
             // (pure fresnel reads as a flat disc); rim glow on the counter-hue
             float3 p = ro + dir * tRay;
-            float3 n = calcNormal(p, time, audio);
+            float3 n = calcNormal(p, time, audio, theme);
             float3 Cc = crystalCenter(time, audio);
             float3 L = normalize(float3(0.0, 0.5, -0.8));
             float dif = max(dot(n, L), 0.0);
@@ -257,6 +263,7 @@ extension AIBlockCityScene {
             colOut = cCol * (0.10 + 0.65 * dif) * (0.35 + 0.65 * ao)
                    + hsv2rgb(fract(hue + 0.5), 0.7 * satPop, 1.0) * fres * 0.7
                        * (1.0 + audio.w * 0.8);
+            colOut *= theme.y;                          // emotion: crystal strength
             float fog = 1.0 - exp(-0.0009 * tRay * tRay);
             colOut = mix(colOut, sky, fog * 0.7);
         } else if (m > 1.5) {
@@ -272,7 +279,7 @@ extension AIBlockCityScene {
         } else {
             // terrain: dark violet body + neon grid + voronoi veins + ring
             float3 p = ro + dir * tRay;
-            float3 n = calcNormal(p, time, audio);
+            float3 n = calcNormal(p, time, audio, theme);
             float h01 = clamp(p.y / 2.2, 0.0, 1.0);
             float3 base = mix(hsv2rgb(fract(0.75 + hueShift * 0.8), 0.80, 0.035),
                               hsv2rgb(fract(0.83 + hueShift * 0.8), 0.82, 0.17), h01);
@@ -322,7 +329,7 @@ extension AIBlockCityScene {
                 float tw = 0.55 + 0.45 * sin(time * (2.0 + h1 * 4.0) + h3 * 40.0);
                 float glow = min(0.004 / (d * d + 0.004), 2.5);
                 colOut += hsv2rgb(fract(0.90 + hueShift * 1.4 + h2 * 0.2), 0.65, 1.0)
-                        * glow * tw * (0.4 + audio.z * 0.9);
+                        * glow * tw * (0.4 + audio.z * 0.9) * theme.w;  // emotion: ember strength
             }
         }
 
@@ -336,7 +343,7 @@ extension AIBlockCityScene {
         float off = lkgViewOffset(ti.viewT, P.size, P.flip);
         float3 ro = float3(off, P.camH, P.dist);
         float3 dir = lkgViewRay(ti, off, P.dist, P.fovTan, P.aspect, P.pitch);
-        return float4(shadeScene(ro, dir, ti.tileNDC, P.time, P.audio), 1.0);
+        return float4(shadeScene(ro, dir, ti.tileNDC, P.time, P.audio, P.theme), 1.0);
     }
 
     // Single-view LDR render (square staging) as diffusion img2img input.
@@ -348,7 +355,7 @@ extension AIBlockCityScene {
         float3 dir = normalize(float3(ndc.x * P.fovTan, ndc.y * P.fovTan, -1.0));
         float cp = cos(P.pitch), sp = sin(P.pitch);
         dir = float3(dir.x, dir.y * cp + dir.z * sp, -dir.y * sp + dir.z * cp);
-        return float4(aces(shadeScene(ro, dir, ndc, P.time, P.audio)), 1.0);
+        return float4(aces(shadeScene(ro, dir, ndc, P.time, P.audio, P.theme)), 1.0);
     }
     """
 }

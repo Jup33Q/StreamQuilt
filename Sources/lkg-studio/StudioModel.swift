@@ -63,6 +63,8 @@ final class StudioModel: ObservableObject {
     @Published private(set) var bpm = 0
     @Published private(set) var deviceAvailable = true
     @Published private(set) var lastError = ""
+    /// 情感引擎当前判定（emotion id · theme_en），供 UI 展示。
+    @Published private(set) var emotionLabel = ""
 
     @Published var deviceFullscreen = false { didSet { applyDeviceFullscreen() } }
     @Published var testPattern = false { didSet { deviceWindow?.testPattern = testPattern } }
@@ -80,6 +82,8 @@ final class StudioModel: ObservableObject {
     private let music = MusicBridge()
     private let analyzer = AudioAnalyzer()
     private let lyrics = LyricsService()
+    /// 情感引擎（等价 lkg-ai-demo --emotion-engine）：曲目主题 → prompt 中段 + 场景 theme。
+    private let themeEngine = TrackThemeEngine(ollama: OllamaClient())
     private var musicActive = false
     private var micActive = false
 
@@ -128,6 +132,10 @@ final class StudioModel: ObservableObject {
         }
         rebuildPipeline()
         lyrics.attach(music: music) { [weak self] line in self?.lyricLineChanged(line) }
+        themeEngine.onTheme = { [weak self] t in
+            self?.scene?.themeBias = SIMD4(t.hueBias, t.crystalGain, t.columnGain, t.emberGain)
+        }
+        themeEngine.attach(music: music, lyrics: lyrics)
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.refreshStats()
         }
@@ -140,6 +148,7 @@ final class StudioModel: ObservableObject {
         persistConfig()
         statsTimer?.invalidate()
         lyrics.stop()
+        themeEngine.stop()
         music.stop()
         analyzer.stop()
         client?.stopAll()
@@ -164,6 +173,11 @@ final class StudioModel: ObservableObject {
             renderer = r
             deviceWindow?.renderer = r
             let s = try AIBlockCityScene(renderer: r, viewSize: renderSize)
+            // re-apply the current emotion theme after a pipeline rebuild
+            if !themeEngine.currentTheme.isEmpty {
+                s.themeBias = SIMD4(themeEngine.currentHueBias, themeEngine.currentGains.x,
+                                    themeEngine.currentGains.y, themeEngine.currentGains.z)
+            }
             scene = s
             let c = DiffusionClient(workerCount: workers, prompt: prompt,
                                     renderSize: renderSize, strength: strength,
@@ -239,7 +253,7 @@ final class StudioModel: ObservableObject {
         case .mic: beat = analyzer.current.beat
         case .none: beat = 0
         }
-        return 1 + beatGlow * beat
+        return 1 + beatGlow * (audioSource == .music ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1) * beat
     }
 
     // MARK: - Preview frame (30 Hz MTKView on the main screen)
@@ -305,7 +319,9 @@ final class StudioModel: ObservableObject {
     private func lyricLineChanged(_ line: String) {
         lyricLine = line
         guard lyricPrompt else { return }
-        let composed = prompt + ", " + String(line.prefix(60))
+        // 情感引擎已产出时用主题提示词做中段，否则退回手动 prompt（现状行为）
+        let base = themeEngine.currentTheme.isEmpty ? prompt : themeEngine.currentTheme
+        let composed = base + ", " + String(line.prefix(60))
         let apply = { [weak self] in
             self?.client?.setPrompt(composed)
             print("[lyric-prompt] “\(line.prefix(60))”")
@@ -364,9 +380,13 @@ final class StudioModel: ObservableObject {
             playing = music.playing
             bpm = music.bpm
             lyricLine = lyrics.currentLine
+            emotionLabel = themeEngine.currentEmotionID.isEmpty ? ""
+                : themeEngine.currentEmotionID
+                  + (themeEngine.currentThemeEN.isEmpty ? "" : " · " + themeEngine.currentThemeEN)
         } else {
             nowPlaying = ""
             lyricLine = ""
+            emotionLabel = ""
         }
     }
 

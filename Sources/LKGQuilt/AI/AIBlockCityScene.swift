@@ -25,12 +25,17 @@ public final class AIBlockCityScene {
     public private(set) var staging: [MTLTexture]
     public private(set) var readBuffers: [MTLBuffer]
 
+    /// Emotion-engine scene theme: (hueBias, crystalGain, columnGain, emberGain).
+    /// Default is bitwise-neutral (hue +0, gains ×1) — offline dumps stay identical.
+    public var themeBias: SIMD4<Float> = SIMD4(0, 1, 1, 1)
+
     struct BaseParams {
         var tileSize: SIMD2<Float>
         var audio: SIMD4<Float>
         var cols: Float; var rows: Float; var time: Float
         var size: Float; var flip: Float; var dist: Float; var camH: Float
         var fovTan: Float; var pitch: Float; var aspect: Float
+        var theme: SIMD4<Float>
     }
 
     struct ViewParams {
@@ -38,6 +43,7 @@ public final class AIBlockCityScene {
         var time: Float; var viewT: Float; var size: Float; var flip: Float
         var dist: Float; var camH: Float; var fovTan: Float; var pitch: Float
         var renderSize: Float
+        var theme: SIMD4<Float>
     }
 
     /// Supplies (bass, mid, treble, beat) each encode; nil = silence.
@@ -87,7 +93,8 @@ public final class AIBlockCityScene {
             audio: audioProvider?() ?? .zero,
             cols: Float(spec.columns), rows: Float(spec.rows), time: t,
             size: sweep, flip: flip, dist: dist, camH: camH,
-            fovTan: tan(fovY / 2), pitch: pitch, aspect: spec.tileAspect)
+            fovTan: tan(fovY / 2), pitch: pitch, aspect: spec.tileAspect,
+            theme: themeBias)
         enc.setFragmentBytes(&p, length: MemoryLayout<BaseParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -106,7 +113,8 @@ public final class AIBlockCityScene {
             time: time * timeScale,
             viewT: Float(viewIndex) / Float(renderer.spec.viewCount - 1),
             size: sweep, flip: flip, dist: dist, camH: camH,
-            fovTan: tan(fovY / 2), pitch: pitch, renderSize: Float(viewSize))
+            fovTan: tan(fovY / 2), pitch: pitch, renderSize: Float(viewSize),
+            theme: themeBias)
         enc.setFragmentBytes(&p, length: MemoryLayout<ViewParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()

@@ -39,6 +39,9 @@ struct CLI {
     var altMix: Float = 0       // 常驻原始层混合比（0-1；G 键按住时平滑推到 1）
     var beatGlow: Float = 0.25  // AI 层显示级节拍脉冲幅度（0=关；interlace 内主 quilt 增益）
     var lyricPrompt = true      // L3 歌词行热调制 prompt（--no-lyric-prompt 关）
+    var emotionEngine = true    // 情感引擎：Ollama 曲目主题/情感 → prompt+场景 theme（仅 music 源）
+    var ollamaURL = "http://127.0.0.1:11434"
+    var ollamaModel = "gemma4:e4b-mlx"
     var grid = "7x8"   // AI 路径默认 7x8=56（低算力布局）；11x6 为全规格 66
     var units = ""     // 逗号分隔，如 "all,cpu_and_gpu"；空 = 异构默认
     var audioSource = "music"   // music（Apple Music 节拍钟，默认）| mic | none
@@ -76,6 +79,10 @@ while i < args.count {
     case "--beat-glow": cli.beatGlow = Float(args[i + 1]) ?? 0.25; i += 1
     case "--lyric-prompt": cli.lyricPrompt = true
     case "--no-lyric-prompt": cli.lyricPrompt = false
+    case "--emotion-engine": cli.emotionEngine = true
+    case "--no-emotion-engine": cli.emotionEngine = false
+    case "--ollama": cli.ollamaURL = args[i + 1]; i += 1
+    case "--ollama-model": cli.ollamaModel = args[i + 1]; i += 1
     case "--grid": cli.grid = args[i + 1]; i += 1
     case "--units": cli.units = args[i + 1]; i += 1
     case "--audio-source": cli.audioSource = args[i + 1]; i += 1
@@ -201,6 +208,7 @@ do {
     let music = MusicBridge()
     let analyzer = AudioAnalyzer()
     let lyrics = LyricsService()
+    let themeEngine = TrackThemeEngine()
     if cli.audioSource == "music" {
         scene.audioProvider = { music.features }
         music.start()
@@ -208,12 +216,23 @@ do {
         if cli.beatEpoch {
             coordinator.beatClockProvider = { music.beatClock }
         }
+        // 情感引擎：曲目主题分类（Ollama）→ 场景 theme uniform + prompt 中段；
+        // 失败/超时时 trackName hash 兜底，不阻塞主流程
+        if cli.emotionEngine {
+            themeEngine.ollama = OllamaClient(base: cli.ollamaURL, model: cli.ollamaModel)
+            themeEngine.onTheme = { t in
+                scene.themeBias = SIMD4(t.hueBias, t.crystalGain, t.columnGain, t.emberGain)
+            }
+            themeEngine.attach(music: music, lyrics: lyrics)
+        }
         // L3: lyric line change -> hot prompt modulation (throttled in
         // LyricsService; here we snap the switch to the next beat boundary
         // when one is near, so the style drift lands on the beat grid).
         lyrics.attach(music: music) { line in
             guard cli.lyricPrompt else { return }
-            let composed = cli.prompt + ", " + String(line.prefix(60))
+            let theme = cli.emotionEngine ? themeEngine.currentTheme : ""
+            let base = theme.isEmpty ? cli.prompt : theme
+            let composed = base + ", " + String(line.prefix(60))
             let apply = {
                 client.setPrompt(composed)
                 print("[lyric-prompt] “\(line.prefix(60))”")
@@ -248,7 +267,11 @@ do {
         case "mic": beat = analyzer.current.beat
         default: beat = 0
         }
-        return 1 + cli.beatGlow * beat
+        // 情感引擎 energy（含 chorus 短期 +0.3）缩放节拍脉冲；引擎关闭保持原样
+        let glow: Float = (cli.emotionEngine && cli.audioSource == "music")
+            ? cli.beatGlow * (0.7 + 0.6 * themeEngine.effectiveEnergy)
+            : cli.beatGlow
+        return 1 + glow * beat
     }
     app.onKey = { key in
         if key == "g" { coordinator.rawPeek = true; return true }
@@ -274,6 +297,13 @@ do {
                 s += " | ♪ " + music.line + (music.bpm > 0 ? " \(music.bpm)bpm" : "")
                 if !lyrics.currentLine.isEmpty {
                     s += " | “" + String(lyrics.currentLine.prefix(32)) + "”"
+                }
+                if cli.emotionEngine, !themeEngine.currentEmotionID.isEmpty {
+                    s += " | 🎭 " + themeEngine.currentEmotionID
+                    if !themeEngine.currentThemeEN.isEmpty {
+                        s += " · " + String(themeEngine.currentThemeEN.prefix(24))
+                    }
+                    s += String(format: " e%.2f", themeEngine.effectiveEnergy)
                 }
             } else {
                 s += " | ♪ (Music not playing)"
