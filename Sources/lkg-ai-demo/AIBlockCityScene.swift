@@ -12,8 +12,8 @@ final class AIBlockCityScene {
     var sweep: Float = 2.5
     var fovY: Float = 25 * .pi / 180
     var dist: Float = 13.0
-    var camH: Float = 3.2
-    var pitch: Float = 0.20
+    var camH: Float = 2.5
+    var pitch: Float = 0.07
     var flip: Float = 1.0
     /// AI path: diffusion refreshes at ~1-2 Hz, so slow the scene animation
     /// down to keep staged tiles from going stale too fast.

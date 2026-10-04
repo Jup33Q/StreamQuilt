@@ -28,6 +28,7 @@ struct CLI {
     var showPreview = true
     var renderScale: Float = 1.0
     var batch = 1
+    var feedback: Float = 0.3   // latent 时序粘合（防频闪）
     var grid = "7x8"   // AI 路径默认 7x8=56（低算力布局）；11x6 为全规格 66
     var units = ""     // 逗号分隔，如 "all,cpu_and_gpu"；空 = 异构默认
     var audioSource = "music"   // music（Apple Music 节拍钟，默认）| mic | none
@@ -57,6 +58,7 @@ while i < args.count {
     case "--no-preview": cli.showPreview = false
     case "--half": cli.renderScale = 0.5
     case "--batch": cli.batch = Int(args[i + 1]) ?? 1; i += 1
+    case "--feedback": cli.feedback = Float(args[i + 1]) ?? 0.3; i += 1
     case "--grid": cli.grid = args[i + 1]; i += 1
     case "--units": cli.units = args[i + 1]; i += 1
     case "--audio-source": cli.audioSource = args[i + 1]; i += 1
@@ -72,7 +74,7 @@ func makeClient() -> DiffusionClient {
     DiffusionClient(workerCount: cli.workers, prompt: cli.prompt,
                     renderSize: cli.renderSize, strength: cli.strength,
                     pythonPath: cli.python, scriptPath: cli.script, coremlDir: cli.models,
-                    batch: cli.batch,
+                    batch: cli.batch, feedback: cli.feedback,
                     units: cli.units.isEmpty ? nil : cli.units.split(separator: ",").map(String.init))
 }
 
@@ -91,6 +93,8 @@ do {
                                    source: renderer.altQuiltTexture) { cmd in
             scene.encodeBase(cmd: cmd, time: cli.time, into: renderer.altQuiltTexture)
         }
+        renderer.saveQuiltPNG(to: peekPath.replacingOccurrences(of: ".png", with: "-quilt.png"),
+                              source: renderer.altQuiltTexture) { _ in }
         exit(0)
     }
 

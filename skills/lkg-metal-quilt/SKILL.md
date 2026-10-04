@@ -174,3 +174,11 @@ Swift CoreAIRuntime 加载 ✓，NDArray 支持 MTLBuffer 零拷贝）。
   续作见 docs/lyrics-and-peek-plan.md。
 - 调试技巧：LKG_PEEK_TEST=1 环境变量可让 app 自动进 peek 并落盘 interlace PNG，
   无需手动按键即可验证显示路径。
+
+## 频闪治理与新场景（2026-10-04 固化，docs/flicker-fix-plan.md）
+
+- AI tile 频闪四根因：硬切换 / 输入时间戳不一致 / 风格明度方差 / 更新顺序随机感。
+  对应：三段交叉淡入（tileBlitPSO blending）+ epoch 时间量化（floor(sceneTime)）+
+  同视角最小间隔 0.4s + feedback 0.3 + 场景风格明度对齐。
+- raymarch 构图速算：fov 25° 时 ndc 半宽 0.22，物体角半径 asin(r/dist) 超它就超半帧；
+  雾系数 >0.002 会淹没中景；预览 dump 看构图先出 -quilt.png 别看 interlace 图。

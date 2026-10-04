@@ -80,7 +80,19 @@ public final class QuiltRenderer {
         tonemapPSO = try pso("lkgTonemapFS", format: .bgra8Unorm)
         lenticularPSO = try pso("lkgLenticularFS", format: .bgra8Unorm)
         testPatternPSO = try pso("lkgTestPatternFS", format: .rgba16Float)
-        tileBlitPSO = try pso("lkgTileBlitFS", format: .rgba16Float)
+
+        let td = MTLRenderPipelineDescriptor()
+        td.vertexFunction = lib.makeFunction(name: "lkgFullscreenVS")
+        td.fragmentFunction = lib.makeFunction(name: "lkgTileBlitFS")
+        td.colorAttachments[0].pixelFormat = .rgba16Float
+        td.colorAttachments[0].isBlendingEnabled = true
+        td.colorAttachments[0].rgbBlendOperation = .add
+        td.colorAttachments[0].alphaBlendOperation = .add
+        td.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        td.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        td.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        td.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        tileBlitPSO = try dev.makeRenderPipelineState(descriptor: td)
         rebuildTarget()
 
         let ldr = MTLTextureDescriptor.texture2DDescriptor(
@@ -132,7 +144,9 @@ public final class QuiltRenderer {
 
     /// Composite an LDR sRGB image (any size; center-cropped to tile aspect)
     /// into one view's tile of the persistent quilt, converting to linear HDR.
-    public func updateTile(index: Int, srcTexture: MTLTexture, cmd: MTLCommandBuffer) {
+    /// blendAlpha < 1 crossfades with the existing tile content (anti-flicker).
+    public func updateTile(index: Int, srcTexture: MTLTexture, cmd: MTLCommandBuffer,
+                           blendAlpha: Float = 1) {
         let vp = tileRect(index: index)
         let tileW = Float(vp.width), tileH = Float(vp.height)
         let srcW = Float(srcTexture.width), srcH = Float(srcTexture.height)
@@ -143,14 +157,15 @@ public final class QuiltRenderer {
         struct TileBlitParams {
             var tileOrigin: SIMD2<Float>; var tileSize: SIMD2<Float>
             var cropOrigin: SIMD2<Float>; var cropSize: SIMD2<Float>
-            var srcSize: SIMD2<Float>
+            var srcSize: SIMD2<Float>; var blendAlpha: Float; var pad0: Float
         }
         var p = TileBlitParams(
             tileOrigin: SIMD2(Float(vp.originX), Float(vp.originY)),
             tileSize: SIMD2(tileW, tileH),
             cropOrigin: SIMD2((srcW - cropW) * 0.5, (srcH - cropH) * 0.5),
             cropSize: SIMD2(cropW, cropH),
-            srcSize: SIMD2(srcW, srcH))
+            srcSize: SIMD2(srcW, srcH),
+            blendAlpha: blendAlpha, pad0: 0)
 
         let pass = makeQuiltPassDescriptor(loadAction: .load)
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }

@@ -28,6 +28,8 @@ enum LKGFixedShaders {
         float2 cropOrigin;  // center-crop origin in the source texture
         float2 cropSize;    // crop size in the source texture
         float2 srcSize;
+        float blendAlpha;   // crossfade factor (blending PSO: srcAlpha)
+        float pad0;
     };
 
     vertex float4 lkgFullscreenVS(uint vid [[vertex_id]]) {
@@ -104,7 +106,7 @@ enum LKGFixedShaders {
 
     /// Per-tile update blit: samples an LDR sRGB source (e.g. a stylized view
     /// image) with center-crop, converts to linear, writes into the HDR quilt.
-    /// The render pass must be scoped to the tile rect via viewport+scissor.
+    /// Alpha drives crossfade (blendAlpha in params; blending enabled on the PSO).
     fragment float4 lkgTileBlitFS(float4 fpos [[position]],
                                   constant LKGTileBlitParams& P [[buffer(0)]],
                                   texture2d<float> src [[texture(0)]]) {
@@ -112,7 +114,7 @@ enum LKGFixedShaders {
         float2 t = (fpos.xy - P.tileOrigin) / P.tileSize; // 0..1, y down
         float2 uv = (P.cropOrigin + t * P.cropSize) / P.srcSize;
         float3 c = src.sample(s, uv).rgb;
-        return float4(pow(max(c, 0.0), float3(2.2)), 1.0);
+        return float4(pow(max(c, 0.0), float3(2.2)), P.blendAlpha);
     }
     """
 }

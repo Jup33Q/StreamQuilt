@@ -2,11 +2,18 @@ import Foundation
 
 /// Metal source for AIBlockCityScene. Prepended with LKGShaderCommon.msl at
 /// pipeline creation, which provides lkgTileInfo / lkgViewOffset / lkgViewRay.
+///
+/// Scene v2: synthwave terrain (valley corridor + sunset sun + stars).
+/// Audio channels drive independent parameters:
+///   bass   -> terrain amplitude + sun size
+///   mid    -> camera sway + terrain drift speed
+///   treble -> star density/twinkle
+///   beat   -> sun flash + expanding shockwave ring on the terrain
 extension AIBlockCityScene {
     static let sceneMSL = """
     struct AIBaseParams {
         float2 tileSize;
-        float4 audio;   // bass, mid, treble, beat (AudioAnalyzer)
+        float4 audio;   // bass, mid, treble, beat
         float cols, rows, time, size, flip, dist, camH, fovTan, pitch, aspect;
     };
 
@@ -32,46 +39,43 @@ extension AIBlockCityScene {
         return v * mix(float3(1.0), clamp(p - 1.0, 0.0, 1.0), s);
     }
 
-    static float sdBox(float3 p, float3 b) {
-        float3 q = abs(p) - b;
-        return length(max(q, float3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+    static float vnoise(float2 p) {
+        float2 i = floor(p), f = fract(p);
+        f = f * f * (3.0 - 2.0 * f);
+        float a = hash21(i), b = hash21(i + float2(1, 0));
+        float c = hash21(i + float2(0, 1)), d = hash21(i + float2(1, 1));
+        return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
     }
 
-    static float2 map(float3 p, float t, float4 audio) {
-        float2 res = float2(p.y, 0.0);
-        float c = 2.2;
-        float2 id = floor(p.xz / c);
-        float2 r = (fract(p.xz / c) - 0.5) * c;
-        float2 idw = id - floor(id / 64.0) * 64.0;
-        float h0 = hash21(idw);
-        float wave = sin(t * 1.6 - length(id) * 0.55 + h0 * 6.2831) * 0.5 + 0.5;
-        // bass pumps block heights, treble sharpens the pulse
-        float pump = 0.65 + audio.x * 1.4;
-        float h = (0.25 + 2.6 * h0) * (0.55 + 0.45 * wave) * pump;
-        float dB = sdBox(float3(r.x, p.y - h * 0.5, r.y), float3(0.55, h * 0.5, 0.55)) - 0.04;
-        if (dB < res.x) res = float2(dB, 1.0 + h0);
+    static float fbm(float2 p) {
+        float v = 0.0, a = 0.5;
+        for (int i = 0; i < 3; i++) {
+            v += a * vnoise(p);
+            p = p * 2.1 + float2(17.3, 9.1);
+            a *= 0.5;
+        }
+        return v;
+    }
 
-        // beat makes the orbit cube jump
-        float jump = audio.w * 1.2;
-        float a = t * 0.6;
-        float3 q2 = p - float3(cos(a) * 3.4, 2.4 + sin(t * 0.9) * 0.6 + jump, sin(a) * 3.4 - 1.5);
-        float cr = cos(t * 0.8), sr = sin(t * 0.8);
-        q2 = float3(q2.x * cr - q2.z * sr, q2.y, q2.x * sr + q2.z * cr);
-        float cq = cos(t * 0.5), sq = sin(t * 0.5);
-        q2 = float3(q2.x, q2.y * cq - q2.z * sq, q2.y * sq + q2.z * cq);
-        float dC = sdBox(q2, float3(0.5)) - 0.05;
-        if (dC < res.x) res = float2(dC, 3.0);
+    static float terrainH(float2 xz, float t, float4 audio) {
+        float amp = 0.9 + audio.x * 2.4;                    // bass pumps terrain
+        float h = fbm(xz * 0.16 + float2(0.0, t * (0.25 + audio.y * 0.6))) * amp;
+        h += sin(xz.x * 0.35) * 0.22;
+        h *= smoothstep(0.0, 3.0, abs(xz.x));               // central valley corridor
+        return h;
+    }
+
+    // returns (dist, materialId): 0 = terrain, 2 = sun
+    static float2 map(float3 p, float t, float4 audio) {
+        float2 res = float2((p.y - terrainH(p.xz, t, audio)) * 0.55, 0.0);
+        float sunR = 2.1 * (1.0 + audio.x * 0.22 + audio.w * 0.10);
+        float dSun = length(p - float3(0.0, 6.0, -24.0)) - sunR;
+        if (dSun < res.x) res = float2(dSun, 2.0);
         return res;
     }
 
-    static float3 palette(float m, float t) {
-        if (m > 2.5) return float3(1.0, 0.55, 0.15);
-        if (m > 0.5) return hsv2rgb(fract(m * 0.618 + t * 0.02), 0.75, 1.0);
-        return float3(0.15, 0.2, 0.3);
-    }
-
     static float3 calcNormal(float3 p, float t, float4 audio) {
-        float2 e = float2(0.0015, -0.0015);
+        float2 e = float2(0.002, -0.002);
         return normalize(e.xyy * map(p + e.xyy, t, audio).x +
                          e.yyx * map(p + e.yyx, t, audio).x +
                          e.yxy * map(p + e.yxy, t, audio).x +
@@ -85,47 +89,71 @@ extension AIBlockCityScene {
     }
 
     static float3 shadeScene(float3 ro, float3 dir, float2 ndc, float time, float4 audio) {
+        // mid -> gentle camera sway, beat -> small bob
+        ro.x += sin(time * 0.5) * 0.5 * audio.y;
+        ro.y += audio.w * 0.15;
+
         float tRay = 0.0;
         float m = -1.0;
-        float3 glow = float3(0.0);
-        for (int i = 0; i < 90; i++) {
+        for (int i = 0; i < 110; i++) {
             float3 p = ro + dir * tRay;
             float2 dm = map(p, time, audio);
-            // beat flash amplifies near-miss glow
-            glow += palette(dm.y, time) * exp(-max(dm.x, 0.0) * 9.0) * 0.005 * (1.0 + audio.w * 2.5);
-            if (dm.x < 0.0012 * tRay + 0.0006) { m = dm.y; break; }
-            tRay += dm.x * 0.9;
-            if (tRay > 80.0) break;
+            if (dm.x < 0.0015 * tRay + 0.001) { m = dm.y; break; }
+            tRay += dm.x * 0.95;
+            if (tRay > 70.0) break;
         }
 
-        float3 sky = mix(float3(0.02, 0.03, 0.07), float3(0.05, 0.10, 0.22), pow(max(dir.y, 0.0), 0.6));
-        sky += float3(0.10, 0.20, 0.50) * pow(max(1.0 - abs(dir.y), 0.0), 6.0) * 0.35;
-        sky *= 1.0 + audio.w * 0.6; // beat sky pulse
+        // sunset sky + stars
+        float horiz = pow(max(1.0 - abs(dir.y), 0.0), 7.0);
+        float3 sky = mix(float3(0.03, 0.015, 0.10), float3(0.32, 0.10, 0.30), horiz);
+        sky += float3(1.0, 0.45, 0.25) * pow(max(1.0 - abs(dir.y + 0.02), 0.0), 18.0) * 0.55;
+        if (dir.y > 0.04) {
+            float2 sp = dir.xz / max(dir.y, 0.05);
+            float2 cell = floor(sp * 36.0);
+            float h = hash21(cell);
+            float tw = 0.5 + 0.5 * sin(time * (1.5 + h * 5.0) + h * 40.0);
+            float star = step(0.9965 - audio.z * 0.003, h); // treble adds stars
+            sky += star * tw * (0.35 + audio.z * 0.9) * float3(0.8, 0.9, 1.0);
+        }
+        sky *= 1.0 + audio.w * 0.5;                          // beat sky flash
 
         float3 colOut;
         if (m < -0.5) {
             colOut = sky;
+        } else if (m > 1.5) {
+            // synthwave sun: hot gradient + scanline gaps widening toward bottom
+            float3 p = ro + dir * tRay;
+            float yy = (p.y - 6.0) / 2.1;                   // -1..1 over the disc
+            float3 sun = mix(float3(1.0, 0.15, 0.55), float3(1.0, 0.9, 0.35),
+                             clamp(yy * 0.5 + 0.5, 0.0, 1.0));
+            float gap = clamp(0.5 - yy * 0.5, 0.05, 1.0);   // wider gaps lower
+            float stripe = smoothstep(gap, gap + 0.06, fract(p.y * 1.6 - time * 0.25));
+            colOut = sun * (0.35 + 1.3 * stripe) * (1.8 + audio.w * 1.6);
         } else {
+            // terrain: dark violet body + neon grid + beat shockwave ring
             float3 p = ro + dir * tRay;
             float3 n = calcNormal(p, time, audio);
-            float3 base = palette(m, time + audio.z * 3.0); // treble shifts palette
-            if (m < 0.5) {
-                float2 g = abs(fract(p.xz / 2.2) - 0.5);
-                float line = smoothstep(0.465, 0.5, max(g.x, g.y));
-                base = float3(0.02, 0.03, 0.06) + float3(0.0, 0.45, 0.9) * line * 0.8;
-            }
-            float3 L = normalize(float3(0.5, 0.8, 0.35));
+            float h01 = clamp(p.y / 2.2, 0.0, 1.0);
+            float3 base = mix(float3(0.03, 0.02, 0.09), float3(0.16, 0.05, 0.28), h01);
+
+            float2 g = abs(fract(p.xz / 1.5) - 0.5);
+            float line = smoothstep(0.455, 0.5, max(g.x, g.y));
+            float3 gridCol = mix(float3(0.0, 0.9, 1.0), float3(1.0, 0.2, 0.75),
+                                 0.5 + 0.5 * sin(time * 0.3 + p.x * 0.2));
+
+            // shockwave ring expands as the beat pulse decays
+            float ringR = (1.0 - audio.w) * 9.0;
+            float ring = exp(-abs(length(p.xz) - ringR) * 2.2) * audio.w;
+
+            float3 L = normalize(float3(0.0, 0.5, -0.8));   // key light from the sun
             float dif = max(dot(n, L), 0.0);
-            float3 V = -dir;
-            float spec = pow(max(dot(reflect(-L, n), V), 0.0), 32.0);
-            float fre = pow(1.0 - max(dot(n, V), 0.0), 4.0);
-            colOut = base * (0.25 + 0.85 * dif) + spec * 0.35 + fre * base * 0.6;
-            if (m > 2.5) colOut += base * 1.5;
-            if (m > 0.5 && m < 2.5) colOut += base * smoothstep(0.9, 1.0, n.y) * 0.7;
-            float fog = 1.0 - exp(-0.0016 * tRay * tRay);
+            colOut = base * (0.3 + 0.9 * dif)
+                   + gridCol * line * (0.9 + audio.x * 0.8)
+                   + float3(1.0, 0.35, 0.7) * ring * 1.6;
+            float fog = 1.0 - exp(-0.0009 * tRay * tRay);
             colOut = mix(colOut, sky, fog);
         }
-        colOut += glow;
+
         colOut *= 1.0 - 0.12 * dot(ndc, ndc);
         return colOut;
     }
@@ -140,8 +168,6 @@ extension AIBlockCityScene {
     }
 
     // Single-view LDR render (square staging) as diffusion img2img input.
-    // Horizontal fov matches vertical (square); the quilt composite center-crops
-    // to the portrait tile aspect.
     fragment float4 aiViewFS(float4 fpos [[position]], constant AIViewParams& P [[buffer(0)]]) {
         float2 uv = float2(fpos.x / P.renderSize, 1.0 - fpos.y / P.renderSize);
         float2 ndc = uv * 2.0 - 1.0;

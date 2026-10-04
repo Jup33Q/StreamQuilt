@@ -42,6 +42,9 @@ final class DiffusionClient {
     private let scriptPath: String
     private let coremlDir: String
     private let batch: Int
+    /// Per-view latent temporal feedback (0-1). Higher = stronger frame-to-frame
+    /// coherence (anti-flicker), too high smears motion.
+    private let feedback: Float
     /// Compute-unit assignment per worker. Default hetero split: worker 0 on ANE
     /// ("all"), the rest on GPU ("cpu_and_gpu") — ANE+GPU truly run in parallel,
     /// while two ANE workers just time-slice (measured 19 vs 44 tiles/s).
@@ -56,7 +59,7 @@ final class DiffusionClient {
 
     init(workerCount: Int, prompt: String, renderSize: Int, strength: Float,
          pythonPath: String, scriptPath: String, coremlDir: String,
-         batch: Int = 1, units: [String]? = nil) {
+         batch: Int = 1, feedback: Float = 0.3, units: [String]? = nil) {
         self.workerCount = workerCount
         self.prompt = prompt
         self.renderSize = renderSize
@@ -65,6 +68,7 @@ final class DiffusionClient {
         self.scriptPath = scriptPath
         self.coremlDir = coremlDir
         self.batch = batch
+        self.feedback = feedback
         self.units = units ?? (0..<workerCount).map { $0 == 0 ? "all" : "cpu_and_gpu" }
     }
 
@@ -114,6 +118,7 @@ final class DiffusionClient {
                        "--strength", String(strength),
                        "--compute-units", units[id % units.count],
                        "--batch", String(batch),
+                       "--feedback", String(feedback),
                        "--coreml-dir", coremlDir,
                        "--worker-id", String(id)]
         var env = ProcessInfo.processInfo.environment

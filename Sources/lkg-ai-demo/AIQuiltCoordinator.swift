@@ -21,6 +21,12 @@ final class AIQuiltCoordinator {
     private var frameCount = 0
     /// Per-view last-apply timestamps (wall clock), for per-tile refresh metrics.
     private var lastAppliedAt: [Double]
+    /// Per-view last-dispatch timestamps; enforces min re-diffusion interval.
+    private var lastDispatchAt: [Double]
+    /// Minimum seconds between two diffusions of the same view (anti-thrash).
+    var minViewInterval: Double = 0.4
+    /// Crossfade generation per view; a newer result cancels an older fade.
+    private var fadeGen: [Int: Int] = [:]
     private var started = false
 
     /// Hold-to-peek: while true, the raw raymarch renders into the alt quilt
@@ -47,6 +53,7 @@ final class AIQuiltCoordinator {
         viewOrder = (0..<n).sorted { abs(Float($0) - center) < abs(Float($1) - center) }
         stagingInUse = [Bool](repeating: false, count: scene.staging.count)
         lastAppliedAt = [Double](repeating: 0, count: n)
+        lastDispatchAt = [Double](repeating: 0, count: n)
     }
 
     /// Start the self-sustaining dispatch loop (call after client.start()).
@@ -109,10 +116,11 @@ final class AIQuiltCoordinator {
     }
 
     private func nextFreeViewLocked() -> Int? {
+        let now = CACurrentMediaTime()
         for _ in 0..<viewOrder.count {
             let v = viewOrder[orderPos % viewOrder.count]
             orderPos += 1
-            if !inFlight.contains(v) { return v }
+            if !inFlight.contains(v), now - lastDispatchAt[v] >= minViewInterval { return v }
         }
         return nil
     }
@@ -122,12 +130,16 @@ final class AIQuiltCoordinator {
             client.cancelReservation(workerIndex)
             return
         }
-        let t = sceneTime()
+        // epoch quantization: every view dispatched in the same wall-clock
+        // second shares one scene timestamp -> geometry/lighting consistent
+        // within a sweep (anti-flicker).
+        let t = floor(sceneTime())
         scene.encodeView(cmd: cmd, viewIndex: v, stagingIndex: slot, time: t)
         scene.encodeReadback(cmd: cmd, stagingIndex: slot)
         stateLock.lock()
         inFlight.insert(v)
         stagingInUse[slot] = true
+        lastDispatchAt[v] = CACurrentMediaTime()
         dispatchCount += 1
         let elapsed = Date().timeIntervalSince(dispatchWindowStart)
         if elapsed >= 2 {
@@ -163,7 +175,6 @@ final class AIQuiltCoordinator {
     }
 
     private func applyResult(_ r: DiffusionClient.Result) {
-        guard let cmd = renderer.commandQueue.makeCommandBuffer() else { return }
         let d = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: r.width, height: r.height, mipmapped: false)
         d.storageMode = .shared
@@ -173,8 +184,26 @@ final class AIQuiltCoordinator {
             tex.replace(region: MTLRegionMake2D(0, 0, r.width, r.height),
                         mipmapLevel: 0, withBytes: ptr.baseAddress!, bytesPerRow: r.width * 4)
         }
-        renderer.updateTile(index: r.view, srcTexture: tex, cmd: cmd)
-        cmd.commit()
+
+        // 3-step crossfade; a newer result for the same view cancels older steps.
+        stateLock.lock()
+        fadeGen[r.view] = (fadeGen[r.view] ?? 0) + 1
+        let gen = fadeGen[r.view]!
+        stateLock.unlock()
+        let steps: [(Float, Double)] = [(0.4, 0), (0.75, 0.12), (1.0, 0.24)]
+        for (alpha, delay) in steps {
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else { return }
+                self.stateLock.lock()
+                let current = self.fadeGen[r.view] ?? 0
+                self.stateLock.unlock()
+                guard current == gen else { return }
+                guard let cmd = self.renderer.commandQueue.makeCommandBuffer() else { return }
+                self.renderer.updateTile(index: r.view, srcTexture: tex, cmd: cmd,
+                                         blendAlpha: alpha)
+                cmd.commit()
+            }
+        }
     }
 
     /// Scene clock mirrors LKGApp's pause-aware time.
