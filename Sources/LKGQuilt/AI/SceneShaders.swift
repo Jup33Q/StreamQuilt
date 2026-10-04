@@ -14,8 +14,10 @@ import Foundation
 ///   beat   -> sun flash + shockwave ring + crystal breath + ember jump
 ///             + hue kick / saturation snap (撞色: complementary pairs orbit
 ///             the hue wheel together, per-element multipliers add clash)
-/// Composition notes (fov 25°, ndc half-width 0.22): crystal angular radius
-/// ~2.7° ≈ 1/5 of the half-frame — presence without dominance; keep it small.
+/// Composition notes (fov 25°, ndc half-width 0.22): crystal hovers just
+/// behind the focus plane at (2.2, 4.8, -8) — angular radius ~4.3° ≈ 1/3 of
+/// the half-frame; shell stepping never clips the fractal (shell 2.0 > extent
+/// ~1.6). Columns live in the z ∈ [-18, 8] band around the focus plane.
 extension AIBlockCityScene {
     static let sceneMSL = """
     struct AIBaseParams {
@@ -114,15 +116,18 @@ extension AIBlockCityScene {
         return h;
     }
 
+    /// Crystal floats just behind the focus plane (z=0) so the 3D pop reads
+    /// on the panel; right-offset to share the sky with the sun.
     static float3 crystalCenter(float t, float4 audio) {
-        return float3(0.0, 5.0 + 0.3 * sin(t * 0.7) + audio.w * 0.3, -16.0);
+        return float3(2.2, 4.8 + 0.3 * sin(t * 0.7) + audio.w * 0.3, -8.0);
     }
 
-    /// Column field flanking the corridor: hashed cells, each column bound to
-    /// bass/mid/treble by hash -> an equalizer-pillar forest. Returns
-    /// (capped-cylinder dist, cellHash, bandValue, topY) or dist=1e5 when empty.
+    /// Column field flanking the corridor, band-limited around the focus
+    /// plane (z=0) so the pillars sit at readable 3D depth: hashed cells, each
+    /// column bound to bass/mid/treble by hash -> equalizer-pillar forest.
+    /// Returns (capped-cylinder dist, cellHash, bandValue, topY).
     static float4 columnField(float3 p, float t, float4 audio) {
-        if (abs(p.x) < 2.4 || p.y > 12.0 || p.z < -30.0 || p.z > 15.0) {
+        if (abs(p.x) < 2.4 || p.y > 12.0 || p.z < -18.0 || p.z > 8.0) {
             return float4(1e5, 0.0, 0.0, 0.0);
         }
         float2 cell = floor(p.xz / 3.2);
@@ -146,13 +151,13 @@ extension AIBlockCityScene {
         // equalizer columns (single nearest cell — radius < half spacing)
         float4 col = columnField(p, t, audio);
         if (col.x < res.x) res = float2(col.x, 4.0);
-        // crystal: outside the influence shell the sphere distance is a
-        // conservative step (fractal is strictly inside), never a hit surface.
-        // Fractal evaluated in 1.6x-downscaled local space -> smaller crystal.
+        // crystal: shell radius (2.0) comfortably exceeds the fractal extent
+        // (/1.2 local scale -> ~1.6 world), so no clipping flat cap; outside
+        // the shell the sphere distance is only a conservative step.
         float3 C = crystalCenter(t, audio);
-        float dB = length(p - C) - 1.7;
+        float dB = length(p - C) - 2.0;
         if (dB < 0.3) {
-            float dF = max(crystalDE((p - C) / 1.6, t, audio) * 1.6, dB);
+            float dF = crystalDE((p - C) / 1.2, t, audio) * 1.2;
             if (dF < res.x) res = float2(dF, 3.0);
         } else if (dB < res.x) {
             res.x = dB;   // safe skip toward the shell, material unchanged
@@ -225,7 +230,7 @@ extension AIBlockCityScene {
             float3 L = normalize(float3(0.0, 0.5, -0.8));
             float dif = max(dot(n, L), 0.0);
             // per-column hue offset keeps pillar colors diverse (richness)
-            float3 body = hsv2rgb(fract(0.70 + hueShift * 0.6 + hc * 0.25), 0.55, 0.16);
+            float3 body = hsv2rgb(fract(0.70 + hueShift * 0.6 + hc * 0.25), 0.55, 0.22);
             float3 cap = hsv2rgb(fract(0.30 + hueShift + hc * 0.5), 0.9 * satPop, 1.2);
             float capGlow = exp(min((p.y - top) * 1.4, 0.0) * 1.0);  // 1 at the cap, decays down
             // rocky voronoi texture on the shaft
@@ -237,16 +242,21 @@ extension AIBlockCityScene {
             float fog = 1.0 - exp(-0.0009 * tRay * tRay);
             colOut = mix(colOut, sky, fog);
         } else if (m > 2.5) {
-            // mandelbox crystal: fresnel-rimmed iridescent body, rim sits on
-            // the counter-hue (+0.5) so it always clashes with its own body.
-            // Kept dim enough to survive ACES without washing to white.
+            // mandelbox crystal: diffuse key light + one-tap AO give it volume
+            // (pure fresnel reads as a flat disc); rim glow on the counter-hue
             float3 p = ro + dir * tRay;
             float3 n = calcNormal(p, time, audio);
-            float fres = pow(1.0 - max(dot(n, -dir), 0.0), 2.0);
+            float3 Cc = crystalCenter(time, audio);
+            float3 L = normalize(float3(0.0, 0.5, -0.8));
+            float dif = max(dot(n, L), 0.0);
+            float ao = clamp(crystalDE((p - Cc) / 1.2 + n * 0.10, time, audio) * 1.2 / 0.12,
+                             0.0, 1.0);
+            float fres = pow(1.0 - max(dot(n, -dir), 0.0), 2.5);
             float hue = fract(0.55 + hueShift + 0.20 * sin(p.y * 2.0 + time * 0.5));
             float3 cCol = hsv2rgb(hue, 0.85 * satPop, 1.0);
-            colOut = cCol * (0.12 + fres * 0.85) * (1.0 + audio.w * 0.8)
-                   + hsv2rgb(fract(hue + 0.5), 0.7 * satPop, 1.0) * 0.06;
+            colOut = cCol * (0.10 + 0.65 * dif) * (0.35 + 0.65 * ao)
+                   + hsv2rgb(fract(hue + 0.5), 0.7 * satPop, 1.0) * fres * 0.7
+                       * (1.0 + audio.w * 0.8);
             float fog = 1.0 - exp(-0.0009 * tRay * tRay);
             colOut = mix(colOut, sky, fog * 0.7);
         } else if (m > 1.5) {
