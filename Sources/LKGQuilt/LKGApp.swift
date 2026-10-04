@@ -29,6 +29,8 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
     public var onKey: ((String) -> Bool)?
     /// Extra text appended to the periodic status line.
     public var onStatusLine: (() -> String)?
+    /// Called from applicationWillTerminate — release external resources (e.g. child processes).
+    public var onWillTerminate: (() -> Void)?
 
     public var showPreview = true
     /// Show the raw quilt on the device instead of the interlaced image (key: b).
@@ -135,8 +137,13 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
 
     public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
+    public func applicationWillTerminate(_ notification: Notification) {
+        onWillTerminate?()
+    }
+
     public static func findLKGScreen() -> NSScreen? {
-        NSScreen.screens.first {
+        if ProcessInfo.processInfo.environment["LKG_NO_DEVICE"] != nil { return nil }
+        return NSScreen.screens.first {
             $0.localizedName.localizedCaseInsensitiveContains("LKG") ||
             ($0.frame.width == 1440 && $0.frame.height == 2560)
         }

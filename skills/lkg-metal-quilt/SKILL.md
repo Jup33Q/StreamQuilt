@@ -93,6 +93,45 @@ app.run()
 预览窗限 30Hz（否则主屏 120Hz 的 blit 会抢 GPU）。GPU 计时注意
 `gpuStartTime/EndTime` 包含 vsync 等待，测量要拆 command buffer。
 
+## AI quilt 管线（lkg-ai-demo，2026-10-04 实测固化）
+
+逐视角 StreamDiffusion 风格化实时上屏。架构：Metal raymarch 逐视角 384² staging →
+Python worker 池（CoreML SDXS img2img）→ 区域拼回持久化 quilt → interlace 60Hz。
+**事件驱动是关键**：worker 完成一个 tile 立即触发下一个视角渲染+派发（结果回调自持续），
+不要挂在 display link 上（LKG 屏的 MTKView display link 会被拖慢到 ~2.7Hz，原因未明，
+解耦后完全不受影响）。
+
+实测数据（M5 Max）：
+- 单 worker 512²：25ms/帧（40 img/s）；384² 异构双 worker：90 tiles/s（bench）/
+  77 tiles/s（实机），每视角均刷新 ~1.4 Hz（7×8=56 布局全扫 0.7s）。
+- **并发正确姿势是 ANE+GPU 异构**（worker0=all，其余=cpu_and_gpu）：双 ANE 时分复用
+  只有 19 tiles/s。batch UNet（b4）ANE/GPU 都更慢（~50ms/view），已转换留档勿默认。
+- 7×8=56 布局（`QuiltSpec.lkgGo56`，tile 288×512，quilt 2016×4096）比 66 省 15% 视角
+  +31% 像素，tile 宽高比 0.5625 与屏幕精确一致。
+- 指标看**单 tile 平均刷新率**（tiles/s ÷ viewCount），别看整屏 FPS（永远 60）。
+
+Python worker 踩坑（python/quilt_diffusion_worker.py）：
+- Pipeline init 会往 stdout 打印 → 用 dup2 把 fd1 临时重定向到 stderr，否则协议流被污染。
+- `threading.current_thread().ident` 可能 >2^32 → 打包前 & 0xFFFFFFFF。
+- venv 用 `.venv/bin/python -m pip`（无 pip 可执行文件）；PyPI 直连超时，用阿里/清华镜像；
+  HF 直连超时，用 `HF_HUB_OFFLINE=1` + 本地 snapshot。
+- macOS 27 会把老 scipy wheel 干废（__thread_bss 报错）→ `pip install -U scipy` 升级修复。
+- 非 512 分辨率要在 MODEL_CONFIGS 注入 unet_prefix（worker 已自动处理 384 等）。
+- 逐视角 latent feedback：worker 按 view 换存 `_prev_denoised`（防串视角污染）；
+  固定 seed 噪声保证 66 视角风格一致。
+
+Swift 侧踩坑：
+- `Data.removeFirst` 后下标不从 0 开始 → `copyBytes(from:)` 必须用 startIndex 相对偏移
+  （否则 EXC_BREAKPOINT）。
+- Swift `signal()` 回调不能捕获上下文 → 用全局变量持有 client。
+- CoreML predict 返回的 MLMultiArray 是池化复用的，读结果要立刻拷贝。
+- Swift 加载 .mlpackage 需先 `MLModel.compileModel` → .mlmodelc。
+- 结束进程要清理 python worker：TaskStop/杀 bash 会留孤儿占 ANE/GPU（SIGTERM 处理 +
+  onWillTerminate 双保险）。
+
+CoreAI 迁移侦察结论见 docs/coreai-migration.md（coreai-torch 转 .aimodel ✓，
+Swift CoreAIRuntime 加载 ✓，NDArray 支持 MTLBuffer 零拷贝）。
+
 ## 文件地图
 
 - `Sources/LKGQuilt/QuiltSpec.swift` — quilt 网格规格（.lkgGo / .lkgPortrait / 自定义）
@@ -103,3 +142,11 @@ app.run()
 - `Sources/LKGQuilt/LKGFixedShaders.swift` — interlace/tonemap shader（运行时编译）
 - `Sources/LKGQuilt/QuiltMath.swift` — mesh 内容的离轴相机矩阵
 - `Sources/lkg-demo/` — 方块城市 demo 场景
+- `Sources/lkg-ai-demo/` — AI 风格化 demo（DiffusionClient worker 池 + AIQuiltCoordinator
+  事件驱动调度 + AIBlockCityScene 逐视角渲染）
+- `python/quilt_diffusion_worker.py` — StreamDiffusion 逐视角 worker（协议见文件头注释）
+- `python/bench_coreml_pipeline.py` / `bench_concurrent.py` / `bench_batch.py` — 基准工具
+- `scripts/convert_unet_coreml.py` — 离线 UNet→CoreML 转换（支持本地 snapshot 与 --batch）
+- `scripts/coreml_spike.swift` — 纯 Swift+CoreML img2img 链路验证
+- `scripts/coreai_smoke_test.py` — coreai-torch 转换 + coreai.runtime 加载验证
+- `docs/coreai-migration.md` — CoreAI/CoreML Swift 迁移可行性备忘录

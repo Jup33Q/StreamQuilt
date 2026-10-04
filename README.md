@@ -127,6 +127,64 @@ Measured on Apple M5 Max, Looking Glass Go, full 4092x4092 quilt:
 The interlace pass reads the full quilt texture with scattered tile access;
 keep the quilt as rgba16Float in private storage and avoid extra copies.
 
+## AI demo: StreamDiffusion-stylized quilt (lkg-ai-demo)
+
+Raymarched views are piped through StreamDiffusion (CoreML img2img) per view and
+composited back into the quilt — an AI-stylized hologram, live.
+
+```
+Metal raymarch (per view, square staging) -> Python worker pool (CoreML SDXS img2img,
+ANE + GPU hetero split) -> per-tile composite into persistent quilt -> interlace 60 Hz
+```
+
+Measured on M5 Max, 7x8=56-view layout (quilt 2016x4096), 2 workers, 384px:
+**display 60 FPS locked; ~77 tiles/s; every view refreshes ~1.4 Hz on average**
+(full sweep ~0.7 s). Event-driven: a finished worker immediately triggers the next
+view render + dispatch, so AI throughput does not depend on the display link.
+
+### Setup
+
+```sh
+# 1. CoreML models (one-time, offline from a local HF snapshot):
+python3 scripts/convert_unet_coreml.py --snapshot <IDKiro/sdxs-512-0.9 snapshot dir> \
+    --hidden-size 1024 --size 512 --output models/unet_sdxs_512.mlpackage
+#    (repeat with --size 384 -> unet_sdxs_384.mlpackage; TAESD 384/512 enc/dec are
+#     auto-converted on first run by the streamdiffusion-mac pipeline)
+
+# 2. Python env: reuse the streamdiffusion-mac venv (coremltools/torch/diffusers),
+#    passed via --python (default ~/Documents/kimi/workspace/streamdiffusion-mac/.venv/bin/python)
+```
+
+### Run
+
+```sh
+swift run -c release lkg-ai-demo                                   # live: 2 workers, 384px, 7x8
+swift run -c release lkg-ai-demo -- --workers 3 --render-size 512  # beefier
+swift run -c release lkg-ai-demo -- --dump ai-quilt.png            # offline quilt PNG
+swift run -c release lkg-ai-demo -- --prompt "watercolor painting" # custom style
+```
+
+Flags: `--workers N` · `--render-size 320/384/512` · `--strength 0-1` ·
+`--grid 7x8|11x6` · `--units all,cpu_and_gpu` (per-worker compute units; hetero
+ANE+GPU is the measured optimum) · `--batch N` (batched UNet, needs
+`unet_*_bN.mlpackage` — measured slower than per-view, kept for reference) ·
+`--prompt/--python/--script/--models`.
+
+Status line reads per-tile refresh: `tile 1.38 Hz avg` = mean per-view update
+rate (`tiles/s ÷ viewCount`) — the metric that matters for the rolling-update
+quilt, since the display itself always runs at 60 Hz.
+
+### Migration tracks (M3/M4 conclusions)
+
+- **CoreML-in-Swift works**: `scripts/coreml_spike.swift` runs the full img2img
+  chain (TAESD enc → UNet → euler step → TAESD dec) in pure Swift, output
+  pixel-matches the Python path. 21 img/s single-context (Python path is faster
+  thanks to coremltools' reused buffers; optimizable).
+- **CoreAI (coreai-torch → .aimodel → CoreAIRuntime) works**:
+  `scripts/coreai_smoke_test.py` converts a torch model end-to-end; Swift loads
+  it via `AIModel(contentsOf:)`, and `NDArray(unsafeBuffer: MTLBuffer...)` gives
+  zero-copy Metal interop. Full analysis: [docs/coreai-migration.md](docs/coreai-migration.md).
+
 ## License
 
 MIT

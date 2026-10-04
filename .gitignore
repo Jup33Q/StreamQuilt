@@ -4,3 +4,5 @@
 .DS_Store
 /lkg-quilt
 legacy/
+models/
+/tmp/

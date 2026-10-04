@@ -20,6 +20,14 @@ enum LKGFixedShaders {
         float cols, rows;
     };
 
+    struct LKGTileBlitParams {
+        float2 tileOrigin;  // pixel origin (top-left) of the tile in the quilt target
+        float2 tileSize;    // tile size in the quilt target
+        float2 cropOrigin;  // center-crop origin in the source texture
+        float2 cropSize;    // crop size in the source texture
+        float2 srcSize;
+    };
+
     vertex float4 lkgFullscreenVS(uint vid [[vertex_id]]) {
         float2 p = float2((vid << 1) & 2, vid & 2);
         return float4(p * 2.0 - 1.0, 0.0, 1.0);
@@ -81,6 +89,19 @@ enum LKGFixedShaders {
         float row = P.rows - 1.0 - rowT;
         float idx = row * P.cols + col;
         return float4(lkgHsv2rgb(fract(idx / (P.cols * P.rows)), 0.85, 1.4), 1.0);
+    }
+
+    /// Per-tile update blit: samples an LDR sRGB source (e.g. a stylized view
+    /// image) with center-crop, converts to linear, writes into the HDR quilt.
+    /// The render pass must be scoped to the tile rect via viewport+scissor.
+    fragment float4 lkgTileBlitFS(float4 fpos [[position]],
+                                  constant LKGTileBlitParams& P [[buffer(0)]],
+                                  texture2d<float> src [[texture(0)]]) {
+        constexpr sampler s(filter::linear, address::clamp_to_edge);
+        float2 t = (fpos.xy - P.tileOrigin) / P.tileSize; // 0..1, y down
+        float2 uv = (P.cropOrigin + t * P.cropSize) / P.srcSize;
+        float3 c = src.sample(s, uv).rgb;
+        return float4(pow(max(c, 0.0), float3(2.2)), 1.0);
     }
     """
 }

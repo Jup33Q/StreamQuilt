@@ -26,6 +26,7 @@ public final class QuiltRenderer {
     private let tonemapPSO: MTLRenderPipelineState
     private let lenticularPSO: MTLRenderPipelineState
     private let testPatternPSO: MTLRenderPipelineState
+    private let tileBlitPSO: MTLRenderPipelineState
     private var ldrTexture: MTLTexture!       // tonemapped quilt (PNG export)
     private var lenticTexture: MTLTexture!    // interlaced screen image (PNG export)
 
@@ -50,6 +51,7 @@ public final class QuiltRenderer {
         tonemapPSO = try pso("lkgTonemapFS", format: .bgra8Unorm)
         lenticularPSO = try pso("lkgLenticularFS", format: .bgra8Unorm)
         testPatternPSO = try pso("lkgTestPatternFS", format: .rgba16Float)
+        tileBlitPSO = try pso("lkgTileBlitFS", format: .rgba16Float)
         rebuildTarget()
 
         let ldr = MTLTextureDescriptor.texture2DDescriptor(
@@ -78,12 +80,59 @@ public final class QuiltRenderer {
     /// Render pass descriptor covering the whole quilt texture. Encode your
     /// scene into it — for raymarched content draw one fullscreen triangle and
     /// use `LKGShaderCommon.msl`'s `lkgTileInfo()` in your fragment shader.
-    public func makeQuiltPassDescriptor() -> MTLRenderPassDescriptor {
+    /// Use `.load` when compositing onto a persistent quilt (e.g. AI tile updates).
+    public func makeQuiltPassDescriptor(loadAction: MTLLoadAction = .dontCare) -> MTLRenderPassDescriptor {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = quiltTexture
-        pass.colorAttachments[0].loadAction = .dontCare
+        pass.colorAttachments[0].loadAction = loadAction
         pass.colorAttachments[0].storeAction = .store
         return pass
+    }
+
+    /// Pixel rect of a view's tile inside the current quilt texture
+    /// (accounts for renderScale). View 0 = bottom-left tile.
+    public func tileRect(index: Int) -> MTLViewport {
+        let tw = quiltTexture.width / spec.columns
+        let th = quiltTexture.height / spec.rows
+        let col = index % spec.columns
+        let row = index / spec.columns
+        return MTLViewport(originX: Double(col * tw),
+                           originY: Double(quiltTexture.height - (row + 1) * th),
+                           width: Double(tw), height: Double(th), znear: 0, zfar: 1)
+    }
+
+    /// Composite an LDR sRGB image (any size; center-cropped to tile aspect)
+    /// into one view's tile of the persistent quilt, converting to linear HDR.
+    public func updateTile(index: Int, srcTexture: MTLTexture, cmd: MTLCommandBuffer) {
+        let vp = tileRect(index: index)
+        let tileW = Float(vp.width), tileH = Float(vp.height)
+        let srcW = Float(srcTexture.width), srcH = Float(srcTexture.height)
+        // center-crop src to tile aspect
+        let tileAspect = tileW / tileH
+        var cropW = srcW, cropH = srcH
+        if srcW / srcH > tileAspect { cropW = srcH * tileAspect } else { cropH = srcW / tileAspect }
+        struct TileBlitParams {
+            var tileOrigin: SIMD2<Float>; var tileSize: SIMD2<Float>
+            var cropOrigin: SIMD2<Float>; var cropSize: SIMD2<Float>
+            var srcSize: SIMD2<Float>
+        }
+        var p = TileBlitParams(
+            tileOrigin: SIMD2(Float(vp.originX), Float(vp.originY)),
+            tileSize: SIMD2(tileW, tileH),
+            cropOrigin: SIMD2((srcW - cropW) * 0.5, (srcH - cropH) * 0.5),
+            cropSize: SIMD2(cropW, cropH),
+            srcSize: SIMD2(srcW, srcH))
+
+        let pass = makeQuiltPassDescriptor(loadAction: .load)
+        guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
+        enc.setRenderPipelineState(tileBlitPSO)
+        enc.setViewport(vp)
+        enc.setScissorRect(MTLScissorRect(x: Int(vp.originX), y: Int(vp.originY),
+                                          width: Int(vp.width), height: Int(vp.height)))
+        enc.setFragmentBytes(&p, length: MemoryLayout<TileBlitParams>.stride, index: 0)
+        enc.setFragmentTexture(srcTexture, index: 0)
+        enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        enc.endEncoding()
     }
 
     /// Fill the quilt with the calibration test pattern (flat hue per view).

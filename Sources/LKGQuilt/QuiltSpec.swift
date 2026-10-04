@@ -33,6 +33,11 @@ public struct QuiltSpec: Sendable, Equatable {
     /// Looking Glass Go (verified on-device): 4092x4092, 11x6 = 66 views of 372x682.
     public static let lkgGo = QuiltSpec(columns: 11, rows: 6, tileWidth: 372, tileHeight: 682, screenAspect: 0.5625)
 
+    /// LKG Go reduced-cost layout: 7x8 = 56 views of 288x512 (quilt 2016x4096).
+    /// Fewer views and ~31% fewer pixels than the default — for AI/expensive content.
+    /// Tile aspect 0.5625 matches the screen aspect exactly.
+    public static let lkgGo56 = QuiltSpec(columns: 7, rows: 8, tileWidth: 288, tileHeight: 512, screenAspect: 0.5625)
+
     /// Looking Glass Portrait: 3360x3360, 8x6 = 48 views of 420x560.
     public static let lkgPortrait = QuiltSpec(columns: 8, rows: 6, tileWidth: 420, tileHeight: 560, screenAspect: 0.75)
 

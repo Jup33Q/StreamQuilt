@@ -1,0 +1,167 @@
+// lkg-ai-demo: real-time AI-stylized quilt on Looking Glass.
+//
+// Metal raymarches 66 views -> Python StreamDiffusion workers (CoreML img2img)
+// stylize them concurrently -> results composite into the quilt -> lenticular
+// interlace -> LKG at 60 Hz (AI tiles refresh asynchronously).
+//
+//   swift run -c release lkg-ai-demo                                  # live
+//   swift run -c release lkg-ai-demo -- --workers 4 --strength 0.5
+//   swift run -c release lkg-ai-demo -- --dump ai-quilt.png           # offline
+
+import Foundation
+import LKGQuilt
+import Metal
+
+setvbuf(stdout, nil, _IONBF, 0)
+
+// signal handlers can't capture context — keep a global for cleanup.
+private var gDiffusionClient: DiffusionClient?
+
+struct CLI {
+    var prompt = "vaporwave ukiyo-e woodblock print style, neon pastel city, masterpiece"
+    var workers = 2
+    var strength: Float = 0.45
+    var renderSize = 512
+    var dumpPath: String?
+    var time: Float = 1.2
+    var showPreview = true
+    var renderScale: Float = 1.0
+    var batch = 1
+    var grid = "7x8"   // AI 路径默认 7x8=56（低算力布局）；11x6 为全规格 66
+    var units = ""     // 逗号分隔，如 "all,cpu_and_gpu"；空 = 异构默认
+    var python = NSString(string: "~/Documents/kimi/workspace/streamdiffusion-mac/.venv/bin/python").expandingTildeInPath
+    var script = ""
+    var models = ""
+}
+
+var cli = CLI()
+// default paths relative to the package root (cwd under `swift run`)
+let repoRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
+cli.script = repoRoot + "/python/quilt_diffusion_worker.py"
+cli.models = repoRoot + "/models"
+
+var args = CommandLine.arguments
+var i = 1
+while i < args.count {
+    switch args[i] {
+    case "--prompt": cli.prompt = args[i + 1]; i += 1
+    case "--workers": cli.workers = Int(args[i + 1]) ?? 2; i += 1
+    case "--strength": cli.strength = Float(args[i + 1]) ?? 0.45; i += 1
+    case "--render-size": cli.renderSize = Int(args[i + 1]) ?? 512; i += 1
+    case "--dump": cli.dumpPath = args[i + 1]; i += 1
+    case "--time": cli.time = Float(args[i + 1]) ?? 1.2; i += 1
+    case "--no-preview": cli.showPreview = false
+    case "--half": cli.renderScale = 0.5
+    case "--batch": cli.batch = Int(args[i + 1]) ?? 1; i += 1
+    case "--grid": cli.grid = args[i + 1]; i += 1
+    case "--units": cli.units = args[i + 1]; i += 1
+    case "--python": cli.python = args[i + 1]; i += 1
+    case "--script": cli.script = args[i + 1]; i += 1
+    case "--models": cli.models = args[i + 1]; i += 1
+    default: break
+    }
+    i += 1
+}
+
+func makeClient() -> DiffusionClient {
+    DiffusionClient(workerCount: cli.workers, prompt: cli.prompt,
+                    renderSize: cli.renderSize, strength: cli.strength,
+                    pythonPath: cli.python, scriptPath: cli.script, coremlDir: cli.models,
+                    batch: cli.batch,
+                    units: cli.units.isEmpty ? nil : cli.units.split(separator: ",").map(String.init))
+}
+
+func selectSpec() -> QuiltSpec {
+    cli.grid == "11x6" ? .lkgGo : .lkgGo56
+}
+
+do {
+    let renderer = try QuiltRenderer(spec: selectSpec(), renderScale: cli.renderScale)
+    let scene = try AIBlockCityScene(renderer: renderer, viewSize: cli.renderSize)
+
+    if let dumpPath = cli.dumpPath {
+        // Offline: render base, diffuse all views synchronously, save quilt PNG.
+        let client = makeClient()
+        client.start()
+        print("waiting for worker (first init ~10s)...")
+        guard client.waitUntilReady(timeout: 120) else {
+            print("worker failed to become ready"); exit(1)
+        }
+        if let cmd = renderer.commandQueue.makeCommandBuffer() {
+            scene.encodeBase(cmd: cmd, time: cli.time)
+            cmd.commit(); cmd.waitUntilCompleted()
+        }
+        let t0 = Date()
+        for v in 0..<renderer.spec.viewCount {
+            guard let cmd = renderer.commandQueue.makeCommandBuffer() else { continue }
+            scene.encodeView(cmd: cmd, viewIndex: v, stagingIndex: 0, time: cli.time)
+            scene.encodeReadback(cmd: cmd, stagingIndex: 0)
+            cmd.commit(); cmd.waitUntilCompleted()
+
+            let vs = scene.viewSize
+            let src = scene.readbackBytes(stagingIndex: 0).bindMemory(to: UInt8.self)
+            var rgb = Data(count: vs * vs * 3)
+            rgb.withUnsafeMutableBytes { out in
+                let o = out.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                for px in 0..<(vs * vs) {
+                    o[px * 3] = src[px * 4]
+                    o[px * 3 + 1] = src[px * 4 + 1]
+                    o[px * 3 + 2] = src[px * 4 + 2]
+                }
+            }
+            guard let r = client.processSync(view: v, rgb: rgb, width: vs, height: vs) else {
+                print("view \(v): worker timeout, skipped"); continue
+            }
+            // apply result tile
+            if let cmd2 = renderer.commandQueue.makeCommandBuffer() {
+                // reuse coordinator-style apply inline
+                let d = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .rgba8Unorm, width: r.width, height: r.height, mipmapped: false)
+                d.storageMode = .shared; d.usage = .shaderRead
+                if let tex = renderer.device.makeTexture(descriptor: d) {
+                    r.rgba.withUnsafeBytes { ptr in
+                        tex.replace(region: MTLRegionMake2D(0, 0, r.width, r.height),
+                                    mipmapLevel: 0, withBytes: ptr.baseAddress!,
+                                    bytesPerRow: r.width * 4)
+                    }
+                    renderer.updateTile(index: r.view, srcTexture: tex, cmd: cmd2)
+                }
+                cmd2.commit()
+            }
+            if v % 11 == 10 { print("  row done (\(v + 1)/\(renderer.spec.viewCount))") }
+        }
+        cmdWait(renderer)
+        print("all views diffused in \(String(format: "%.1f", Date().timeIntervalSince(t0)))s")
+        renderer.saveQuiltPNG(to: dumpPath) { _ in }
+        client.stopAll()
+        exit(0)
+    }
+
+    // Live mode
+    let app = try LKGApp(spec: selectSpec(), renderScale: cli.renderScale)
+    app.showPreview = cli.showPreview
+    let client = makeClient()
+    let coordinator = AIQuiltCoordinator(scene: scene, renderer: app.renderer, client: client)
+    coordinator.sceneTimeProvider = { app.currentTime() }
+    app.onRenderQuilt = { cmd, _, time in coordinator.onFrame(cmd: cmd, time: time) }
+    app.onKey = { scene.handleKey($0) }
+    app.onStatusLine = { coordinator.statusLine }
+    // clean up workers no matter how we exit (TaskStop/SIGINT orphan them otherwise)
+    gDiffusionClient = client
+    signal(SIGTERM) { _ in gDiffusionClient?.stopAll(); exit(0) }
+    signal(SIGINT) { _ in gDiffusionClient?.stopAll(); exit(0) }
+    app.onWillTerminate = { client.stopAll() }
+    client.start()
+    coordinator.start()
+    app.run()
+} catch {
+    print("error: \(error)")
+    exit(1)
+}
+
+func cmdWait(_ renderer: QuiltRenderer) {
+    if let cmd = renderer.commandQueue.makeCommandBuffer() {
+        cmd.commit(); cmd.waitUntilCompleted()
+    }
+}
