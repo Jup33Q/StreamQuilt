@@ -37,6 +37,7 @@ struct CLI {
     var order = "wave"          // N3 更新顺序：wave 蛇形扫描波 | center 中心优先
     var beatEpoch = true        // N4 epoch 边界对齐节拍（每 2 拍一个 epoch）
     var altMix: Float = 0       // 常驻原始层混合比（0-1；G 键按住时平滑推到 1）
+    var beatGlow: Float = 0.25  // AI 层显示级节拍脉冲幅度（0=关；interlace 内主 quilt 增益）
     var grid = "7x8"   // AI 路径默认 7x8=56（低算力布局）；11x6 为全规格 66
     var units = ""     // 逗号分隔，如 "all,cpu_and_gpu"；空 = 异构默认
     var audioSource = "music"   // music（Apple Music 节拍钟，默认）| mic | none
@@ -71,6 +72,7 @@ while i < args.count {
     case "--order": cli.order = args[i + 1]; i += 1
     case "--no-beat-epoch": cli.beatEpoch = false
     case "--alt-mix": cli.altMix = Float(args[i + 1]) ?? 0; i += 1
+    case "--beat-glow": cli.beatGlow = Float(args[i + 1]) ?? 0.25; i += 1
     case "--grid": cli.grid = args[i + 1]; i += 1
     case "--units": cli.units = args[i + 1]; i += 1
     case "--audio-source": cli.audioSource = args[i + 1]; i += 1
@@ -214,6 +216,17 @@ do {
     // dual-quilt blend: device interlace lerps AI quilt <-> raw raymarch quilt
     // (hold G to fade to raw, release to fade back; --alt-mix sets a floor)
     app.altMixSource = { coordinator.altMixForDisplay }
+    // display-level beat pulse on the AI layer only (raw layer stays steady):
+    // same beat clock as the scene uniforms, 60 Hz smooth, no tile-phase noise
+    app.mainGainProvider = {
+        let beat: Float
+        switch cli.audioSource {
+        case "music": beat = music.features.w
+        case "mic": beat = analyzer.current.beat
+        default: beat = 0
+        }
+        return 1 + cli.beatGlow * beat
+    }
     app.onKey = { key in
         if key == "g" { coordinator.rawPeek = true; return true }
         if scene.handleKey(key) { return true }

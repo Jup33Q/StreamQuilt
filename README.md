@@ -176,7 +176,15 @@ input frame's mean) · `--order wave|center` (serpentine scan-wave vs center-out
 update order) · `--no-beat-epoch` (disable beat-aligned refresh epochs) ·
 `--alt-mix 0-1` (permanent blend floor of the raw raymarch layer under the AI
 quilt; hold `G` to smoothly fade to the raw layer and back — the interlace
-shader lerps both quilts per subpixel at identical view coordinates).
+shader lerps both quilts per subpixel at identical view coordinates) ·
+`--beat-glow 0.25` (display-level beat pulse on the AI layer only — the
+interlace scales the main quilt by `1 + beatGlow*beatPulse`, driven by the same
+beat clock as the scene uniforms, so the whole AI layer breathes in sync).
+
+The main quilt is a persistent AI composite: the raymarch base primes it once
+at startup and never wipes it again (a periodic full-quilt `dontCare` pass
+hard-cuts every tile ~10 times a second — measured worse than tile pop-in).
+The live raw layer lives in the alt quilt and shows through via `--alt-mix`.
 
 Status line reads per-tile refresh: `tile 1.38 Hz avg` = mean per-view update
 rate (`tiles/s ÷ viewCount`) — the metric that matters for the rolling-update

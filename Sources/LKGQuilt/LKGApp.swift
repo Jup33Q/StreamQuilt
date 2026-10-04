@@ -41,6 +41,10 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
     /// (e.g. AI-stylized quilt vs live raw raymarch). Preview hard-switches
     /// to the alt quilt at mix >= 0.5.
     public var altMixSource: (() -> (texture: MTLTexture, mix: Float)?)?
+    /// Per-frame gain on the main quilt sample at display time (device only).
+    /// lkg-ai-demo drives it from the beat clock so the AI layer pulses with
+    /// the music. Default nil = 1 (bit-identical output).
+    public var mainGainProvider: (() -> Float)?
 
     public var showPreview = true
     /// Show the raw quilt on the device instead of the interlaced image (key: b).
@@ -201,7 +205,8 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
         renderer.saveLenticularPNG(to: path, calibration: calibration,
                                    source: displaySourceOverride?() ?? (fullAlt ? altMix!.texture : nil),
                                    alt: fullAlt ? nil : altMix?.texture,
-                                   altMix: fullAlt ? 0 : (altMix?.mix ?? 0)) { cmd in
+                                   altMix: fullAlt ? 0 : (altMix?.mix ?? 0),
+                                   mainGain: mainGainProvider?() ?? 1) { cmd in
             self.encodeScene(cmd: cmd, time: t)
         }
     }
@@ -258,7 +263,8 @@ private final class FrameDriver: NSObject, MTKViewDelegate {
                 r.encodeLenticular(cmd: cmd2, pass: rpd, calibration: app.calibration,
                                    drawableSize: destSize, source: src,
                                    alt: fullAlt ? nil : altMix?.texture,
-                                   altMix: fullAlt ? 0 : (altMix?.mix ?? 0))
+                                   altMix: fullAlt ? 0 : (altMix?.mix ?? 0),
+                                   mainGain: app.mainGainProvider?() ?? 1)
             }
             cmd2.present(drawable)
             cmd2.addCompletedHandler { [weak self] cb in

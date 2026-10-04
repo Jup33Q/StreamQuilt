@@ -16,6 +16,7 @@ enum LKGFixedShaders {
         float overlayShift;  // full-sweep shift as fraction of screen width
         float hasOverlay;
         float altMix;        // lerp toward alt quilt (texture 2), per subpixel
+        float mainGain;      // per-frame gain on the main quilt (beat pulse)
     };
 
     struct LKGTestPatternParams {
@@ -80,7 +81,7 @@ enum LKGFixedShaders {
             float ty = floor(view / LP.tilesX);
             float2 q = float2((tx + uv.x) / LP.tilesX, (ty + uv.y) / LP.tilesY);
             q.y = 1.0 - q.y; // Metal texture v flip
-            float3 qc = quilt.sample(s, q).rgb;
+            float3 qc = quilt.sample(s, q).rgb * LP.mainGain;
             // alt-quilt blend: same q -> per-subpixel, per-view aligned lerp
             // (e.g. smooth fade between AI-stylized and raw raymarch layers).
             if (LP.altMix > 0.0) {

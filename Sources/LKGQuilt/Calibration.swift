@@ -21,6 +21,10 @@ public struct LenticularUniforms {
     /// Lerp factor toward the alt quilt (texture 2): 0 = main quilt only,
     /// 1 = alt quilt only. Per-subpixel, per-view aligned (anti-flicker blend).
     public var altMix: Float = 0
+    /// Per-frame gain applied to the MAIN quilt sample only (before alt mix).
+    /// 1 = neutral; AI demo drives it from the beat clock so the AI layer
+    /// pulses with the music (alt/raw layer stays steady).
+    public var mainGain: Float = 1
 
     public init() {}
 }

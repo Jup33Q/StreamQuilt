@@ -128,6 +128,26 @@ BPM 已知时把 epoch 边界对齐到节拍（每 2 拍一个 epoch），让内
   非 nil 时 epoch = floor(phase/2)*2*beatLen（每 2 拍一个 epoch），播放中生效；
   未播放/非 music 源回退 floor(sceneTime)。`--no-beat-epoch` 关闭。
 
+### N5 — 消灭 10Hz 基底整屏擦写（隐藏频闪源，用户实机观察后定位）
+原设计 `onFrame` 每 6 帧 `encodeBase`（loadAction=.dontCare）整屏覆盖主 quilt：
+AI tile 淡入后活不过 ~0.1s 就被基底 re-prime **硬切**抹掉（截图里「大部分基底+
+零星 AI 补丁」就是这个占空比）。淡入再柔，出口硬切等于白做。
+修复：主 quilt 只在启动时打底一次，之后永不被整屏擦写；基底鲜活感改由
+alt quilt（每帧渲）+ altMix lerp 提供。副产物：scene 时间从 3.1ms→0ms，
+tiles/s 52→63。
+**教训：持久合成层上任何全屏 dontCare pass 都是硬切频闪源。**
+
+### N6 — AI 层节拍脉冲（显示级，用户反馈「AI 层对音效反应不明显」）
+根因：每 tile 在各自派发时刻采样实时 audio uniform，beat 脉冲 exp 衰减
+窗口只有 ~0.15 拍 → 56 tile 是 56 个随机相位的快照，空间上不连贯，
+读作噪声而非节拍。且合成节拍钟是纯周期函数，epoch 对齐采样恒为常数，
+「epoch 锁定 audio」对合成钟无解（对 mic 真音频才有意义）。
+改在显示级做：interlace 加 `mainGain` uniform（仅乘主 quilt 采样，alt 层不动），
+由与场景 uniform 同一个节拍钟 60Hz 驱动：`1 + beatGlow*beatPulse`，
+默认 `--beat-glow 0.25`。整层随节拍平滑呼吸，与动画严格同相。
+lkg-demo 默认 1（c×1.0 位级不变，md5 回归已验）。
+另：peek 期间 alt 层降为 1/2 帧率渲染（全速时 GPU 抢占会把 tiles/s 腰斩到 13）。
+
 ### 验收记录
 - 构建通过；`lkg-demo --dump` md5 回归不变（caaf1d42f528a58ecd3eeaede99aa554）。
 - **euler strength no-op 修复**（streamdiffusion-mac pipelines/coreml.py）：sdxs 走
@@ -138,5 +158,5 @@ BPM 已知时把 epoch 边界对齐到节拍（每 2 拍一个 epoch），让内
   = 亮粉彩 synthwave tile（太阳/网格/山谷构图与输入对齐，视角间一致）。
   强度对比：1.0 风格最强但偏离输入；0.45/0.35 被雾洗白；0.6 平衡（选定默认）。
 - 实机（2026-10-04，M5 Max + LKG-E10707，2 worker 384²，音乐播放中 N4 生效）：
-  60 FPS 锁定 / 51–58 tiles/s / tile 0.92–1.04 Hz / scene 3.1ms / rbLag 1–2ms ✓ 不回退。
-- 录屏对比：（待用户确认残余形态；可试 --alt-mix 0.2 常驻稀释、--strength 0.8 加风格）
+  60 FPS 锁定 / 52–64 tiles/s / tile 0.9–1.1 Hz / stale max 0.9s ✓ 不回退
+  （N5 后 scene 0ms / post 1.1ms）。

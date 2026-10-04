@@ -70,7 +70,7 @@ final class AIQuiltCoordinator {
 
     /// Hold-to-peek: ramps the display mix toward the alt (raw raymarch) quilt.
     var rawPeek = false {
-        didSet { print("[peek] rawPeek = \(rawPeek)") }
+        didSet { if rawPeek != oldValue { print("[peek] rawPeek = \(rawPeek)") } }
     }
 
     /// Alt-quilt blend for the display loop (nil = main quilt only).
@@ -141,18 +141,24 @@ final class AIQuiltCoordinator {
         }
     }
 
-    /// Display-frame hook: re-primes the raymarch base at 1/6 rate, renders
-    /// the alt (raw) quilt while the blend is engaged, smooths the G-fader,
-    /// and runs the dispatch fallback.
+    /// Display-frame hook: primes the base under not-yet-diffused tiles ONCE
+    /// at startup, renders the alt (raw) quilt while the blend is engaged,
+    /// smooths the G-fader, and runs the dispatch fallback.
+    /// NOTE: the base layer must NOT be periodically re-rendered into the
+    /// main quilt — a full-quilt dontCare pass hard-wipes every AI tile
+    /// (~10 Hz), which strobes worse than any tile pop-in. Freshness of the
+    /// raw layer comes from the alt quilt + altMix lerp instead.
     func onFrame(cmd: MTLCommandBuffer, time: Float) {
         let t0 = CACurrentMediaTime()
         frameCount += 1
         // smooth G-fader: exponential approach at display rate (~63% per 8 frames)
         peekMix += ((rawPeek ? 1 : 0) - peekMix) * 0.12
-        if frameCount % 6 == 1 {
+        if frameCount == 1 {
             scene.encodeBase(cmd: cmd, time: time)
         }
-        if rawPeek || peekMix > 0.001 || baseAltMix > 0.001 {
+        // alt (raw) layer: half rate is plenty for a lerp source and keeps the
+        // GPU free for the diffusion workers (full-rate peek halves tiles/s).
+        if rawPeek || peekMix > 0.001 || baseAltMix > 0.001, frameCount % 2 == 0 {
             scene.encodeBase(cmd: cmd, time: time, into: renderer.makeAltQuiltTarget())
         }
         dispatchIdle()
