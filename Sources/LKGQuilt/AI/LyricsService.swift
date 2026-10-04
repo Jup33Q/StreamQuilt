@@ -7,16 +7,18 @@ import Foundation
 /// → LRCLIB (https://lrclib.net/api/get, syncedLyrics LRC or plainLyrics).
 /// Sync uses MusicBridge.position (2s poll + extrapolation); plain lyrics are
 /// spread evenly across the track duration.
-final class LyricsService {
-    struct Line {
-        let t: Double
-        let text: String
+public final class LyricsService {
+    public struct Line {
+        public let t: Double
+        public let text: String
     }
+
+    public init() {}
 
     private(set) var lines: [Line] = []
     private(set) var trackID = ""
     /// Current lyric line at the last-checked position ("" when none).
-    private(set) var currentLine = ""
+    public private(set) var currentLine = ""
     private var timer: Timer?
     private var fetching = false
     /// Prompt-modulation throttle (plan L3: >= 2s between lyric-driven switches).
@@ -24,7 +26,7 @@ final class LyricsService {
 
     /// Start tracking MusicBridge state. `onLine` fires (main thread) whenever
     /// the current line changes to a non-empty string.
-    func attach(music: MusicBridge, onLine: @escaping (String) -> Void) {
+    public func attach(music: MusicBridge, onLine: @escaping (String) -> Void) {
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self, weak music] _ in
             guard let self, let music else { return }
             self.tick(music: music, onLine: onLine)
@@ -33,7 +35,7 @@ final class LyricsService {
         timer = t
     }
 
-    func stop() { timer?.invalidate() }
+    public func stop() { timer?.invalidate() }
 
     private func tick(music: MusicBridge, onLine: (String) -> Void) {
         let id = music.trackName + " — " + music.artist
@@ -71,7 +73,7 @@ final class LyricsService {
     }
 
     /// Last line whose timestamp <= position + 0.2s lookahead.
-    func lineAt(_ position: Double) -> String {
+    public func lineAt(_ position: Double) -> String {
         var result = ""
         for l in lines {
             if l.t <= position + 0.2 { result = l.text } else { break }

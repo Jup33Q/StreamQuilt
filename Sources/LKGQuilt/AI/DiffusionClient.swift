@@ -5,12 +5,12 @@ import Foundation
 ///
 /// Threading: `submit` may be called from any thread (Metal completion
 /// handlers); results are buffered and drained from the render loop.
-final class DiffusionClient {
-    struct Result {
-        let view: Int
-        let width: Int
-        let height: Int
-        let rgba: Data
+public final class DiffusionClient {
+    public struct Result {
+        public let view: Int
+        public let width: Int
+        public let height: Int
+        public let rgba: Data
     }
 
     private final class Worker {
@@ -51,13 +51,13 @@ final class DiffusionClient {
     private let units: [String]
 
     /// Results per second over the last window (for the status line).
-    private(set) var resultsPerSec: Double = 0
+    public private(set) var resultsPerSec: Double = 0
 
     /// Called on the reader thread when a result arrives (live mode uses this
     /// to self-sustain dispatch; dump mode uses drainResults/processSync).
-    var onResult: ((Result) -> Void)?
+    public var onResult: ((Result) -> Void)?
 
-    init(workerCount: Int, prompt: String, renderSize: Int, strength: Float,
+    public init(workerCount: Int, prompt: String, renderSize: Int, strength: Float,
          pythonPath: String, scriptPath: String, coremlDir: String,
          batch: Int = 1, feedback: Float = 0.3, units: [String]? = nil) {
         self.workerCount = workerCount
@@ -72,12 +72,12 @@ final class DiffusionClient {
         self.units = units ?? (0..<workerCount).map { $0 == 0 ? "all" : "cpu_and_gpu" }
     }
 
-    var readyWorkerCount: Int { workers.filter { $0.ready }.count }
-    var hasIdleWorker: Bool { workers.contains { $0.ready && !$0.busy } }
+    public var readyWorkerCount: Int { workers.filter { $0.ready }.count }
+    public var hasIdleWorker: Bool { workers.contains { $0.ready && !$0.busy } }
 
     /// Reserve an idle worker (marks it busy immediately, so concurrent
     /// dispatchers can't double-book it). Pair with `submitReserved`.
-    func reserveWorker() -> Int? {
+    public func reserveWorker() -> Int? {
         writeLock.lock()
         defer { writeLock.unlock() }
         guard let idx = workers.firstIndex(where: { $0.ready && !$0.busy }) else { return nil }
@@ -86,21 +86,21 @@ final class DiffusionClient {
     }
 
     /// Submit a view frame to a previously reserved worker.
-    func submitReserved(workerIndex: Int, view: Int, rgb: Data, width: Int, height: Int) {
+    public func submitReserved(workerIndex: Int, view: Int, rgb: Data, width: Int, height: Int) {
         let w = workers[workerIndex]
         writePacket(to: w, view: view, rgb: rgb, width: width, height: height)
     }
 
     /// Cancel a reservation without submitting (e.g. staging render failed).
-    func cancelReservation(_ workerIndex: Int) {
+    public func cancelReservation(_ workerIndex: Int) {
         workers[workerIndex].busy = false
     }
 
-    func start() {
+    public func start() {
         for i in 0..<workerCount { spawn(id: i) }
     }
 
-    func waitUntilReady(timeout: TimeInterval = 60) -> Bool {
+    public func waitUntilReady(timeout: TimeInterval = 60) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if workers.count == workerCount, workers.allSatisfy({ $0.ready }) { return true }
@@ -197,7 +197,7 @@ final class DiffusionClient {
     }
 
     /// Submit a view frame (RGB, 3 channels). Returns false if no worker is idle.
-    func submit(view: Int, rgb: Data, width: Int, height: Int) -> Bool {
+    public func submit(view: Int, rgb: Data, width: Int, height: Int) -> Bool {
         guard let idx = reserveWorker() else { return false }
         submitReserved(workerIndex: idx, view: view, rgb: rgb, width: width, height: height)
         return true
@@ -214,7 +214,7 @@ final class DiffusionClient {
         writeLock.unlock()
     }
 
-    func setPrompt(_ prompt: String) {
+    public func setPrompt(_ prompt: String) {
         guard let bytes = prompt.data(using: .utf8) else { return }
         var header = Data()
         header.append(contentsOf: withUnsafeBytes(of: UInt32(0xFFFFFFFF).littleEndian) { Array($0) })
@@ -229,7 +229,7 @@ final class DiffusionClient {
     }
 
     /// Drain completed results (called from the render loop).
-    func drainResults() -> [Result] {
+    public func drainResults() -> [Result] {
         resultLock.lock()
         defer { resultLock.unlock() }
         let r = pendingResults
@@ -238,7 +238,7 @@ final class DiffusionClient {
     }
 
     /// Synchronous round trip for offline/dump mode.
-    func processSync(view: Int, rgb: Data, width: Int, height: Int, timeout: TimeInterval = 30) -> Result? {
+    public func processSync(view: Int, rgb: Data, width: Int, height: Int, timeout: TimeInterval = 30) -> Result? {
         guard submit(view: view, rgb: rgb, width: width, height: height) else { return nil }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
@@ -254,7 +254,7 @@ final class DiffusionClient {
         return nil
     }
 
-    func stopAll() {
+    public func stopAll() {
         for w in workers {
             if w.process.isRunning { w.process.terminate() }
         }

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>dev.jup33q.lkg-studio</string>
+    <key>CFBundleName</key>
+    <string>LKG Studio</string>
+    <key>CFBundleExecutable</key>
+    <string>lkg-studio</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>LKG Studio listens to ambient audio (e.g. music playing aloud) to drive audio-reactive holographic visuals. Audio is analyzed locally in real time and never recorded or sent anywhere.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>LKG Studio reads the Now Playing track (title/artist/BPM) from Music.app to sync audio-reactive visuals.</string>
+</dict>
+</plist>

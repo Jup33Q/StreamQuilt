@@ -1,4 +1,3 @@
-import LKGQuilt
 import Metal
 import simd
 
@@ -8,23 +7,23 @@ import simd
 ///
 /// The staging render is square (aspect 1); `QuiltRenderer.updateTile` center-crops
 /// it to the portrait tile aspect when compositing a stylized result.
-final class AIBlockCityScene {
-    var sweep: Float = 2.5
-    var fovY: Float = 25 * .pi / 180
-    var dist: Float = 13.0
-    var camH: Float = 2.5
-    var pitch: Float = 0.07
-    var flip: Float = 1.0
+public final class AIBlockCityScene {
+    public var sweep: Float = 2.5
+    public var fovY: Float = 25 * .pi / 180
+    public var dist: Float = 13.0
+    public var camH: Float = 2.5
+    public var pitch: Float = 0.07
+    public var flip: Float = 1.0
     /// AI path: diffusion refreshes at ~1-2 Hz, so slow the scene animation
     /// down to keep staged tiles from going stale too fast.
-    var timeScale: Float = 0.2
+    public var timeScale: Float = 0.2
 
-    let viewSize: Int
+    public let viewSize: Int
     private let renderer: QuiltRenderer
     private let basePSO: MTLRenderPipelineState
     private let viewPSO: MTLRenderPipelineState
-    private(set) var staging: [MTLTexture]
-    private(set) var readBuffers: [MTLBuffer]
+    public private(set) var staging: [MTLTexture]
+    public private(set) var readBuffers: [MTLBuffer]
 
     struct BaseParams {
         var tileSize: SIMD2<Float>
@@ -42,9 +41,9 @@ final class AIBlockCityScene {
     }
 
     /// Supplies (bass, mid, treble, beat) each encode; nil = silence.
-    var audioProvider: (() -> SIMD4<Float>)?
+    public var audioProvider: (() -> SIMD4<Float>)?
 
-    init(renderer: QuiltRenderer, viewSize: Int = 512, stagingCount: Int = 8) throws {
+    public init(renderer: QuiltRenderer, viewSize: Int = 512, stagingCount: Int = 8) throws {
         self.renderer = renderer
         self.viewSize = viewSize
         let lib = try renderer.device.makeLibrary(source: LKGShaderCommon.msl + Self.sceneMSL, options: nil)
@@ -73,7 +72,7 @@ final class AIBlockCityScene {
 
     /// Full-quilt HDR raymarch — the always-fresh 3D backbone under AI tiles.
     /// `into: nil` renders into the main quilt; pass the alt target for raw peek.
-    func encodeBase(cmd: MTLCommandBuffer, time: Float, into altTarget: MTLTexture? = nil) {
+    public func encodeBase(cmd: MTLCommandBuffer, time: Float, into altTarget: MTLTexture? = nil) {
         let t = time * timeScale
         guard let target = altTarget ?? renderer.quiltTexture else { return }
         let spec = renderer.spec
@@ -95,7 +94,7 @@ final class AIBlockCityScene {
     }
 
     /// Render one view into a staging texture (LDR, for the diffusion worker).
-    func encodeView(cmd: MTLCommandBuffer, viewIndex: Int, stagingIndex: Int, time: Float) {
+    public func encodeView(cmd: MTLCommandBuffer, viewIndex: Int, stagingIndex: Int, time: Float) {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = staging[stagingIndex]
         pass.colorAttachments[0].loadAction = .dontCare
@@ -114,7 +113,7 @@ final class AIBlockCityScene {
     }
 
     /// Encode an async readback of a staging texture into its read buffer (RGBA8).
-    func encodeReadback(cmd: MTLCommandBuffer, stagingIndex: Int) {
+    public func encodeReadback(cmd: MTLCommandBuffer, stagingIndex: Int) {
         guard let blit = cmd.makeBlitCommandEncoder() else { return }
         blit.copy(from: staging[stagingIndex], sourceSlice: 0, sourceLevel: 0,
                   sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
@@ -126,17 +125,17 @@ final class AIBlockCityScene {
     }
 
     /// RGBA bytes of a completed readback.
-    func readbackBytes(stagingIndex: Int) -> UnsafeRawBufferPointer {
+    public func readbackBytes(stagingIndex: Int) -> UnsafeRawBufferPointer {
         UnsafeRawBufferPointer(start: readBuffers[stagingIndex].contents(),
                                count: viewSize * viewSize * 4)
     }
 
-    var statusLine: String {
+    public var statusLine: String {
         String(format: "size %.1f fov %.0f dist %.0f%@", sweep, fovY * 180 / .pi, dist,
                flip < 0 ? " flipped" : "")
     }
 
-    func handleKey(_ key: String) -> Bool {
+    public func handleKey(_ key: String) -> Bool {
         switch key {
         case "f": flip *= -1
         case "-": sweep = max(0.2, sweep - 0.2)

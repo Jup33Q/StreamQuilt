@@ -8,26 +8,28 @@ import Foundation
 ///   - player state + position (extrapolated between polls)
 ///   - playback control (play/pause/next/previous)
 /// From BPM + position we synthesize a beat clock that drives shader uniforms.
-final class MusicBridge {
-    private(set) var line = ""        // "name — artist"
-    private(set) var trackName = ""
-    private(set) var artist = ""
-    private(set) var bpm = 0
-    private(set) var playing = false
-    private(set) var duration: Double = 0
+public final class MusicBridge {
+    public private(set) var line = ""        // "name — artist"
+    public private(set) var trackName = ""
+    public private(set) var artist = ""
+    public private(set) var bpm = 0
+    public private(set) var playing = false
+    public private(set) var duration: Double = 0
+
+    public init() {}
     private var positionAtPoll: Double = 0
     private var lastPollAt = Date.distantPast
     private var timer: Timer?
 
     /// Player position in seconds, extrapolated between AppleScript polls.
-    var position: Double {
+    public var position: Double {
         guard playing else { return positionAtPoll }
         return positionAtPoll + Date().timeIntervalSince(lastPollAt)
     }
 
     /// Continuous beat clock for epoch quantization (N4): (phase in beats,
     /// seconds per beat). nil when not playing.
-    var beatClock: (phase: Double, beatLen: Double)? {
+    public var beatClock: (phase: Double, beatLen: Double)? {
         guard playing else { return nil }
         let b = Double(bpm > 0 ? bpm : 100)
         let len = 60.0 / b
@@ -36,7 +38,7 @@ final class MusicBridge {
 
     /// Synthetic beat-synchronized features: (bass, mid, treble, beat).
     /// When BPM is unknown, falls back to a 100 BPM metronome while playing.
-    var features: SIMD4<Float> {
+    public var features: SIMD4<Float> {
         guard playing else { return .zero }
         let b = Double(bpm > 0 ? bpm : 100)
         let beatLen = 60.0 / b
@@ -49,20 +51,20 @@ final class MusicBridge {
         return SIMD4(beatPulse, offPulse, shimmer, beatPulse)
     }
 
-    func start(pollInterval: TimeInterval = 2) {
+    public func start(pollInterval: TimeInterval = 2) {
         let t = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in self?.poll() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
         poll()
     }
 
-    func stop() { timer?.invalidate() }
+    public func stop() { timer?.invalidate() }
 
     // MARK: controls
 
-    func togglePlayPause() { run(script: #"tell application "Music" to playpause"#) }
-    func nextTrack() { run(script: #"tell application "Music" to next track"#); pollSoon() }
-    func previousTrack() { run(script: #"tell application "Music" to previous track"#); pollSoon() }
+    public func togglePlayPause() { run(script: #"tell application "Music" to playpause"#) }
+    public func nextTrack() { run(script: #"tell application "Music" to next track"#); pollSoon() }
+    public func previousTrack() { run(script: #"tell application "Music" to previous track"#); pollSoon() }
 
     private func pollSoon() {
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.poll() }

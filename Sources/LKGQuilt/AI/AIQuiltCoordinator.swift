@@ -1,11 +1,10 @@
 import Foundation
-import LKGQuilt
 import Metal
 import QuartzCore
 
 /// Mean Rec.601 luma (0-255) of packed RGB/RGBX bytes — used by the
 /// brightness normalization that pulls an AI tile's mean to its input's mean.
-func lumaMean(_ data: Data, bytesPerPixel: Int) -> Float {
+public func lumaMean(_ data: Data, bytesPerPixel: Int) -> Float {
     data.withUnsafeBytes { raw in
         let p = raw.bindMemory(to: UInt8.self)
         guard !p.isEmpty else { return 0 }
@@ -26,14 +25,14 @@ func lumaMean(_ data: Data, bytesPerPixel: Int) -> Float {
 /// immediately triggers compositing of that tile and dispatch of the next
 /// view — AI throughput is fully decoupled from the display link rate.
 /// The display frame only re-primes the fast raymarch base layer.
-final class AIQuiltCoordinator {
-    let scene: AIBlockCityScene
-    let renderer: QuiltRenderer
-    let client: DiffusionClient
+public final class AIQuiltCoordinator {
+    public let scene: AIBlockCityScene
+    public let renderer: QuiltRenderer
+    public let client: DiffusionClient
 
     /// Tile update order: center-out priority vs serpentine scan wave.
-    enum ViewOrderMode { case center, wave }
-    var orderMode: ViewOrderMode = .wave {
+    public enum ViewOrderMode { case center, wave }
+    public var orderMode: ViewOrderMode = .wave {
         didSet { stateLock.lock(); viewOrder = Self.buildViewOrder(orderMode, spec: renderer.spec); orderPos = 0; stateLock.unlock() }
     }
 
@@ -42,39 +41,39 @@ final class AIQuiltCoordinator {
     private var inFlight = Set<Int>()
     private var stagingInUse: [Bool]
     private let stateLock = NSLock()
-    private(set) var tilesApplied = 0
+    public private(set) var tilesApplied = 0
     private var frameCount = 0
     /// Per-view last-apply timestamps (wall clock), for per-tile refresh metrics.
     private var lastAppliedAt: [Double]
     /// Per-view last-dispatch timestamps; enforces min re-diffusion interval.
     private var lastDispatchAt: [Double]
     /// Minimum seconds between two diffusions of the same view (anti-thrash).
-    var minViewInterval: Double = 0.4
+    public var minViewInterval: Double = 0.4
     /// Crossfade generation per view; a newer result cancels an older fade.
     private var fadeGen: [Int: Int] = [:]
     /// N1: brightness normalization strength. 0 = off; 1 = the AI tile's mean
     /// luma is pulled fully to its input frame's mean (anti-flicker backstop).
-    var lumaNormStrength: Float = 1.0
+    public var lumaNormStrength: Float = 1.0
     /// Per-view mean luma of the dispatched input frame (for lumaGain).
     private var inputLuma: [Int: Float] = [:]
     /// N4: beat clock for epoch quantization — returns (phase in beats,
     /// seconds per beat), nil when unavailable (falls back to 1s epochs).
-    var beatClockProvider: (() -> (phase: Double, beatLen: Double)?)?
+    public var beatClockProvider: (() -> (phase: Double, beatLen: Double)?)?
     private var started = false
 
     /// Permanent alt-quilt (raw raymarch) blend floor 0..1 (CLI --alt-mix);
     /// damps AI tile pop-in by always showing some of the fresh raw layer.
-    var baseAltMix: Float = 0
+    public var baseAltMix: Float = 0
     /// Smoothed G-fader position: ramps toward 1 while rawPeek is held.
     private var peekMix: Float = 0
 
     /// Hold-to-peek: ramps the display mix toward the alt (raw raymarch) quilt.
-    var rawPeek = false {
+    public var rawPeek = false {
         didSet { if rawPeek != oldValue { print("[peek] rawPeek = \(rawPeek)") } }
     }
 
     /// Alt-quilt blend for the display loop (nil = main quilt only).
-    var altMixForDisplay: (MTLTexture, Float)? {
+    public var altMixForDisplay: (MTLTexture, Float)? {
         let m = max(peekMix, min(max(baseAltMix, 0), 1))
         guard m > 0.001, let alt = renderer.altQuiltTexture else { return nil }
         return (alt, m)
@@ -89,7 +88,7 @@ final class AIQuiltCoordinator {
     private var onFrameMs: Double = 0
     private var onFrameN = 0
 
-    init(scene: AIBlockCityScene, renderer: QuiltRenderer, client: DiffusionClient) {
+    public init(scene: AIBlockCityScene, renderer: QuiltRenderer, client: DiffusionClient) {
         self.scene = scene
         self.renderer = renderer
         self.client = client
@@ -125,7 +124,7 @@ final class AIQuiltCoordinator {
     }
 
     /// Start the self-sustaining dispatch loop (call after client.start()).
-    func start() {
+    public func start() {
         client.onResult = { [weak self] r in self?.handleResult(r) }
         // Workers become ready asynchronously (~10s model load); poll for the
         // first ready worker and kick off dispatch. After that the loop
@@ -148,7 +147,7 @@ final class AIQuiltCoordinator {
     /// main quilt — a full-quilt dontCare pass hard-wipes every AI tile
     /// (~10 Hz), which strobes worse than any tile pop-in. Freshness of the
     /// raw layer comes from the alt quilt + altMix lerp instead.
-    func onFrame(cmd: MTLCommandBuffer, time: Float) {
+    public func onFrame(cmd: MTLCommandBuffer, time: Float) {
         let t0 = CACurrentMediaTime()
         frameCount += 1
         // smooth G-fader: exponential approach at display rate (~63% per 8 frames)
@@ -312,10 +311,10 @@ final class AIQuiltCoordinator {
     }
 
     /// Scene clock mirrors LKGApp's pause-aware time.
-    var sceneTimeProvider: (() -> Float)?
+    public var sceneTimeProvider: (() -> Float)?
     private func sceneTime() -> Float { sceneTimeProvider?() ?? Float(CACurrentMediaTime()) }
 
-    var statusLine: String {
+    public var statusLine: String {
         stateLock.lock()
         let disp = dispatchesPerSec
         let lag = readbackLagN > 0 ? readbackLagMs / Double(readbackLagN) : 0

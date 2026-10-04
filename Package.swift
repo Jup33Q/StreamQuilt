@@ -3,11 +3,12 @@ import PackageDescription
 
 let package = Package(
     name: "LKGQuilt",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: [
         .library(name: "LKGQuilt", targets: ["LKGQuilt"]),
         .executable(name: "lkg-demo", targets: ["lkg-demo"]),
         .executable(name: "lkg-ai-demo", targets: ["lkg-ai-demo"]),
+        .executable(name: "lkg-studio", targets: ["lkg-studio"]),
     ],
     targets: [
         .target(
@@ -22,7 +23,14 @@ let package = Package(
         .executableTarget(
             name: "lkg-ai-demo",
             dependencies: ["LKGQuilt"],
-            path: "Sources/lkg-ai-demo"
+            path: "Sources/lkg-ai-demo",
+            exclude: ["Info.plist"]
+        ),
+        .executableTarget(
+            name: "lkg-studio",
+            dependencies: ["LKGQuilt"],
+            path: "Sources/lkg-studio",
+            exclude: ["Info.plist"]
         ),
     ]
 )

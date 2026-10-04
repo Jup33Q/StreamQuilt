@@ -8,13 +8,15 @@ import Foundation
 /// Note: Apple Music's PCM is DRM-protected — MusicKit cannot hand us audio.
 /// Listening through the mic works with any source (incl. Apple Music playback);
 /// pair with NowPlayingReader for track metadata/BPM.
-final class AudioAnalyzer {
-    struct Features {
-        var bass: Float = 0   // ~20-150 Hz
-        var mid: Float = 0    // ~150-2000 Hz
-        var treble: Float = 0 // ~2k-8k Hz
-        var beat: Float = 0   // decaying onset pulse 0..1
+public final class AudioAnalyzer {
+    public struct Features {
+        public var bass: Float = 0   // ~20-150 Hz
+        public var mid: Float = 0    // ~150-2000 Hz
+        public var treble: Float = 0 // ~2k-8k Hz
+        public var beat: Float = 0   // decaying onset pulse 0..1
     }
+
+    public init() {}
 
     private let engine = AVAudioEngine()
     private var fftSetup: vDSP.FFT<DSPSplitComplex>?
@@ -27,14 +29,14 @@ final class AudioAnalyzer {
     private let lock = NSLock()
     private var features = Features()
 
-    var current: Features {
+    public var current: Features {
         lock.lock(); defer { lock.unlock() }
         return features
     }
 
-    var isRunning = false
+    public private(set) var isRunning = false
 
-    func start() {
+    public func start() {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             guard granted else {
                 print("[audio] mic access denied — audio-reactive disabled")
@@ -64,7 +66,7 @@ final class AudioAnalyzer {
         print("[audio] mic analyzer running (\(Int(fmt.sampleRate)) Hz)")
     }
 
-    func stop() {
+    public func stop() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
