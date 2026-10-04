@@ -15,6 +15,7 @@ enum LKGFixedShaders {
         float pitch, tilt, center, subp, invView, tilesX, tilesY, screenW, screenH;
         float overlayShift;  // full-sweep shift as fraction of screen width
         float hasOverlay;
+        float altMix;        // lerp toward alt quilt (texture 2), per subpixel
     };
 
     struct LKGTestPatternParams {
@@ -29,7 +30,7 @@ enum LKGFixedShaders {
         float2 cropSize;    // crop size in the source texture
         float2 srcSize;
         float blendAlpha;   // crossfade factor (blending PSO: srcAlpha)
-        float pad0;
+        float lumaGain;     // brightness normalization: pulls output mean to input mean
     };
 
     vertex float4 lkgFullscreenVS(uint vid [[vertex_id]]) {
@@ -65,7 +66,8 @@ enum LKGFixedShaders {
     fragment float4 lkgLenticularFS(float4 fpos [[position]],
                                     constant LKGLenticularParams& LP [[buffer(0)]],
                                     texture2d<float> quilt [[texture(0)]],
-                                    texture2d<float> overlay [[texture(1)]]) {
+                                    texture2d<float> overlay [[texture(1)]],
+                                    texture2d<float> altQuilt [[texture(2)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float2 uv = float2(fpos.x / LP.screenW, 1.0 - fpos.y / LP.screenH); // GL-style, y up
         float3 outCol;
@@ -78,7 +80,13 @@ enum LKGFixedShaders {
             float ty = floor(view / LP.tilesX);
             float2 q = float2((tx + uv.x) / LP.tilesX, (ty + uv.y) / LP.tilesY);
             q.y = 1.0 - q.y; // Metal texture v flip
-            outCol[i] = lkgTonemap(quilt.sample(s, q).rgb)[i];
+            float3 qc = quilt.sample(s, q).rgb;
+            // alt-quilt blend: same q -> per-subpixel, per-view aligned lerp
+            // (e.g. smooth fade between AI-stylized and raw raymarch layers).
+            if (LP.altMix > 0.0) {
+                qc = mix(qc, altQuilt.sample(s, q).rgb, LP.altMix);
+            }
+            outCol[i] = lkgTonemap(qc)[i];
 
             // lyric/overlay layer: per-view parallax shift (z sweeps views),
             // sampled in screen space; overlay texture is Metal-native (top-down).
@@ -106,14 +114,15 @@ enum LKGFixedShaders {
 
     /// Per-tile update blit: samples an LDR sRGB source (e.g. a stylized view
     /// image) with center-crop, converts to linear, writes into the HDR quilt.
-    /// Alpha drives crossfade (blendAlpha in params; blending enabled on the PSO).
+    /// Alpha drives crossfade (blendAlpha in params; blending enabled on the PSO);
+    /// lumaGain rescales brightness (output mean pulled to input mean, anti-flicker).
     fragment float4 lkgTileBlitFS(float4 fpos [[position]],
                                   constant LKGTileBlitParams& P [[buffer(0)]],
                                   texture2d<float> src [[texture(0)]]) {
         constexpr sampler s(filter::linear, address::clamp_to_edge);
         float2 t = (fpos.xy - P.tileOrigin) / P.tileSize; // 0..1, y down
         float2 uv = (P.cropOrigin + t * P.cropSize) / P.srcSize;
-        float3 c = src.sample(s, uv).rgb;
+        float3 c = src.sample(s, uv).rgb * P.lumaGain;
         return float4(pow(max(c, 0.0), float3(2.2)), P.blendAlpha);
     }
     """

@@ -18,6 +18,9 @@ public struct LenticularUniforms {
     public var overlayShift: Float = 0
     /// 1 when an overlay texture is bound.
     public var hasOverlay: Float = 0
+    /// Lerp factor toward the alt quilt (texture 2): 0 = main quilt only,
+    /// 1 = alt quilt only. Per-subpixel, per-view aligned (anti-flicker blend).
+    public var altMix: Float = 0
 
     public init() {}
 }

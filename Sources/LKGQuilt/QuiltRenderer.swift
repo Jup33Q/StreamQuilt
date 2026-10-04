@@ -145,8 +145,10 @@ public final class QuiltRenderer {
     /// Composite an LDR sRGB image (any size; center-cropped to tile aspect)
     /// into one view's tile of the persistent quilt, converting to linear HDR.
     /// blendAlpha < 1 crossfades with the existing tile content (anti-flicker).
+    /// lumaGain rescales the source brightness (output mean pulled toward the
+    /// input frame's mean; anti-flicker brightness normalization).
     public func updateTile(index: Int, srcTexture: MTLTexture, cmd: MTLCommandBuffer,
-                           blendAlpha: Float = 1) {
+                           blendAlpha: Float = 1, lumaGain: Float = 1) {
         let vp = tileRect(index: index)
         let tileW = Float(vp.width), tileH = Float(vp.height)
         let srcW = Float(srcTexture.width), srcH = Float(srcTexture.height)
@@ -157,7 +159,7 @@ public final class QuiltRenderer {
         struct TileBlitParams {
             var tileOrigin: SIMD2<Float>; var tileSize: SIMD2<Float>
             var cropOrigin: SIMD2<Float>; var cropSize: SIMD2<Float>
-            var srcSize: SIMD2<Float>; var blendAlpha: Float; var pad0: Float
+            var srcSize: SIMD2<Float>; var blendAlpha: Float; var lumaGain: Float
         }
         var p = TileBlitParams(
             tileOrigin: SIMD2(Float(vp.originX), Float(vp.originY)),
@@ -165,7 +167,7 @@ public final class QuiltRenderer {
             cropOrigin: SIMD2((srcW - cropW) * 0.5, (srcH - cropH) * 0.5),
             cropSize: SIMD2(cropW, cropH),
             srcSize: SIMD2(srcW, srcH),
-            blendAlpha: blendAlpha, pad0: 0)
+            blendAlpha: blendAlpha, lumaGain: lumaGain)
 
         let pass = makeQuiltPassDescriptor(loadAction: .load)
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
@@ -197,19 +199,24 @@ public final class QuiltRenderer {
 
     /// Interlace the quilt for direct display on a Looking Glass panel.
     /// `source` defaults to the main quilt; pass an alternate target for peek modes.
+    /// `alt` + `altMix` blend a second quilt per subpixel at the same view
+    /// coordinates (0 = source only, 1 = alt only) — smooth layer crossfade.
     public func encodeLenticular(cmd: MTLCommandBuffer, pass: MTLRenderPassDescriptor,
                                  calibration: Calibration, drawableSize: SIMD2<Float>,
                                  source: MTLTexture? = nil,
-                                 overlay: MTLTexture? = nil, overlayShift: Float = 0) {
+                                 overlay: MTLTexture? = nil, overlayShift: Float = 0,
+                                 alt: MTLTexture? = nil, altMix: Float = 0) {
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.setRenderPipelineState(lenticularPSO)
         enc.setFragmentTexture(source ?? quiltTexture, index: 0)
         enc.setFragmentTexture(overlay ?? source ?? quiltTexture, index: 1)
+        enc.setFragmentTexture(alt ?? source ?? quiltTexture, index: 2)
         var lp = calibration.lenticularUniforms(columns: spec.columns, rows: spec.rows)
         lp.screenW = drawableSize.x
         lp.screenH = drawableSize.y
         lp.hasOverlay = overlay != nil ? 1 : 0
         lp.overlayShift = overlayShift
+        lp.altMix = alt != nil ? altMix : 0
         enc.setFragmentBytes(&lp, length: MemoryLayout<LenticularUniforms>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -251,6 +258,7 @@ public final class QuiltRenderer {
     /// (for inspecting the optical transformation off-device).
     public func saveLenticularPNG(to path: String, calibration: Calibration,
                                   source: MTLTexture? = nil,
+                                  alt: MTLTexture? = nil, altMix: Float = 0,
                                   encodeQuilt: (MTLCommandBuffer) -> Void) {
         let w = Int(calibration.screenW), h = Int(calibration.screenH)
         let d = MTLTextureDescriptor.texture2DDescriptor(
@@ -265,7 +273,8 @@ public final class QuiltRenderer {
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
         encodeLenticular(cmd: cmd, pass: pass, calibration: calibration,
-                         drawableSize: SIMD2(Float(w), Float(h)), source: source)
+                         drawableSize: SIMD2(Float(w), Float(h)), source: source,
+                         alt: alt, altMix: altMix)
         cmd.commit()
         cmd.waitUntilCompleted()
         writePNG(texture: tex, to: path)

@@ -3,6 +3,25 @@ import LKGQuilt
 import Metal
 import QuartzCore
 
+/// Mean Rec.601 luma (0-255) of packed RGB/RGBX bytes — used by the
+/// brightness normalization that pulls an AI tile's mean to its input's mean.
+func lumaMean(_ data: Data, bytesPerPixel: Int) -> Float {
+    data.withUnsafeBytes { raw in
+        let p = raw.bindMemory(to: UInt8.self)
+        guard !p.isEmpty else { return 0 }
+        var sum: Double = 0
+        var n = 0
+        // sample every 4th pixel — plenty for a mean, 4x cheaper
+        var i = 0
+        while i + 2 < p.count {
+            sum += Double(p[i]) * 0.299 + Double(p[i + 1]) * 0.587 + Double(p[i + 2]) * 0.114
+            n += 1
+            i += bytesPerPixel * 4
+        }
+        return n > 0 ? Float(sum / Double(n)) : 0
+    }
+}
+
 /// Drives the AI quilt loop, event-driven: a worker finishing a view
 /// immediately triggers compositing of that tile and dispatch of the next
 /// view — AI throughput is fully decoupled from the display link rate.
@@ -12,7 +31,13 @@ final class AIQuiltCoordinator {
     let renderer: QuiltRenderer
     let client: DiffusionClient
 
-    private let viewOrder: [Int]
+    /// Tile update order: center-out priority vs serpentine scan wave.
+    enum ViewOrderMode { case center, wave }
+    var orderMode: ViewOrderMode = .wave {
+        didSet { stateLock.lock(); viewOrder = Self.buildViewOrder(orderMode, spec: renderer.spec); orderPos = 0; stateLock.unlock() }
+    }
+
+    private var viewOrder: [Int]
     private var orderPos = 0
     private var inFlight = Set<Int>()
     private var stagingInUse: [Bool]
@@ -27,12 +52,32 @@ final class AIQuiltCoordinator {
     var minViewInterval: Double = 0.4
     /// Crossfade generation per view; a newer result cancels an older fade.
     private var fadeGen: [Int: Int] = [:]
+    /// N1: brightness normalization strength. 0 = off; 1 = the AI tile's mean
+    /// luma is pulled fully to its input frame's mean (anti-flicker backstop).
+    var lumaNormStrength: Float = 1.0
+    /// Per-view mean luma of the dispatched input frame (for lumaGain).
+    private var inputLuma: [Int: Float] = [:]
+    /// N4: beat clock for epoch quantization — returns (phase in beats,
+    /// seconds per beat), nil when unavailable (falls back to 1s epochs).
+    var beatClockProvider: (() -> (phase: Double, beatLen: Double)?)?
     private var started = false
 
-    /// Hold-to-peek: while true, the raw raymarch renders into the alt quilt
-    /// every frame and the display samples that instead of the AI quilt.
+    /// Permanent alt-quilt (raw raymarch) blend floor 0..1 (CLI --alt-mix);
+    /// damps AI tile pop-in by always showing some of the fresh raw layer.
+    var baseAltMix: Float = 0
+    /// Smoothed G-fader position: ramps toward 1 while rawPeek is held.
+    private var peekMix: Float = 0
+
+    /// Hold-to-peek: ramps the display mix toward the alt (raw raymarch) quilt.
     var rawPeek = false {
         didSet { print("[peek] rawPeek = \(rawPeek)") }
+    }
+
+    /// Alt-quilt blend for the display loop (nil = main quilt only).
+    var altMixForDisplay: (MTLTexture, Float)? {
+        let m = max(peekMix, min(max(baseAltMix, 0), 1))
+        guard m > 0.001, let alt = renderer.altQuiltTexture else { return nil }
+        return (alt, m)
     }
 
     // diagnostics
@@ -49,11 +94,34 @@ final class AIQuiltCoordinator {
         self.renderer = renderer
         self.client = client
         let n = renderer.spec.viewCount
-        let center = Float(n - 1) / 2
-        viewOrder = (0..<n).sorted { abs(Float($0) - center) < abs(Float($1) - center) }
+        viewOrder = Self.buildViewOrder(.wave, spec: renderer.spec)
         stagingInUse = [Bool](repeating: false, count: scene.staging.count)
         lastAppliedAt = [Double](repeating: 0, count: n)
         lastDispatchAt = [Double](repeating: 0, count: n)
+    }
+
+    private static func buildViewOrder(_ mode: ViewOrderMode, spec: QuiltSpec) -> [Int] {
+        let n = spec.viewCount
+        switch mode {
+        case .center:
+            let center = Float(n - 1) / 2
+            return (0..<n).sorted { abs(Float($0) - center) < abs(Float($1) - center) }
+        case .wave:
+            // N3 serpentine scan: bottom row upward, alternating direction —
+            // updates read as a continuous sweep instead of scattered pops.
+            var order: [Int] = []
+            order.reserveCapacity(n)
+            for r in 0..<spec.rows {
+                if r % 2 == 0 {
+                    for c in 0..<spec.columns { order.append(r * spec.columns + c) }
+                } else {
+                    for c in stride(from: spec.columns - 1, through: 0, by: -1) {
+                        order.append(r * spec.columns + c)
+                    }
+                }
+            }
+            return order
+        }
     }
 
     /// Start the self-sustaining dispatch loop (call after client.start()).
@@ -73,15 +141,19 @@ final class AIQuiltCoordinator {
         }
     }
 
-    /// Display-frame hook: raw peek renders every frame into the alt quilt;
-    /// otherwise the base layer re-primes at 1/6 rate + dispatch fallback.
+    /// Display-frame hook: re-primes the raymarch base at 1/6 rate, renders
+    /// the alt (raw) quilt while the blend is engaged, smooths the G-fader,
+    /// and runs the dispatch fallback.
     func onFrame(cmd: MTLCommandBuffer, time: Float) {
         let t0 = CACurrentMediaTime()
         frameCount += 1
-        if rawPeek {
-            scene.encodeBase(cmd: cmd, time: time, into: renderer.makeAltQuiltTarget())
-        } else if frameCount % 6 == 1 {
+        // smooth G-fader: exponential approach at display rate (~63% per 8 frames)
+        peekMix += ((rawPeek ? 1 : 0) - peekMix) * 0.12
+        if frameCount % 6 == 1 {
             scene.encodeBase(cmd: cmd, time: time)
+        }
+        if rawPeek || peekMix > 0.001 || baseAltMix > 0.001 {
+            scene.encodeBase(cmd: cmd, time: time, into: renderer.makeAltQuiltTarget())
         }
         dispatchIdle()
         stateLock.lock()
@@ -125,15 +197,26 @@ final class AIQuiltCoordinator {
         return nil
     }
 
+    /// Epoch-quantized scene timestamp. N4: when a beat clock is available,
+    /// epoch boundaries land on every 2nd beat (content refreshes in time
+    /// with the music); otherwise 1s wall-clock epochs (S1).
+    private func epochTime() -> Float {
+        if let bc = beatClockProvider?() {
+            let epochBeats = 2.0
+            let e = (bc.phase / epochBeats).rounded(.down) * epochBeats
+            return Float(e * bc.beatLen)
+        }
+        return floor(sceneTime())
+    }
+
     private func dispatchView(_ v: Int, slot: Int, workerIndex: Int) {
         guard let cmd = renderer.commandQueue.makeCommandBuffer() else {
             client.cancelReservation(workerIndex)
             return
         }
-        // epoch quantization: every view dispatched in the same wall-clock
-        // second shares one scene timestamp -> geometry/lighting consistent
-        // within a sweep (anti-flicker).
-        let t = floor(sceneTime())
+        // epoch quantization: every view dispatched in the same epoch shares
+        // one scene timestamp -> geometry/lighting consistent within a sweep.
+        let t = epochTime()
         scene.encodeView(cmd: cmd, viewIndex: v, stagingIndex: slot, time: t)
         scene.encodeReadback(cmd: cmd, stagingIndex: slot)
         stateLock.lock()
@@ -167,6 +250,7 @@ final class AIQuiltCoordinator {
                                        width: vs, height: vs)
             self.stateLock.lock()
             self.stagingInUse[slot] = false
+            self.inputLuma[v] = lumaMean(rgb, bytesPerPixel: 3)
             self.readbackLagMs += lag
             self.readbackLagN += 1
             self.stateLock.unlock()
@@ -185,6 +269,21 @@ final class AIQuiltCoordinator {
                         mipmapLevel: 0, withBytes: ptr.baseAddress!, bytesPerRow: r.width * 4)
         }
 
+        // N1 brightness normalization: pull the result's mean luma toward its
+        // input frame's mean (clamped; strength-scaled) — kills the
+        // base<->AI brightness jump that reads as a "patch flash".
+        var gain: Float = 1
+        if lumaNormStrength > 0 {
+            let outLuma = lumaMean(r.rgba, bytesPerPixel: 4)
+            stateLock.lock()
+            let inLuma = inputLuma[r.view]
+            stateLock.unlock()
+            if let inLuma, inLuma > 1, outLuma > 1 {
+                let full = min(max(inLuma / outLuma, 0.5), 2.0)
+                gain = pow(full, lumaNormStrength)
+            }
+        }
+
         // 3-step crossfade; a newer result for the same view cancels older steps.
         stateLock.lock()
         fadeGen[r.view] = (fadeGen[r.view] ?? 0) + 1
@@ -200,7 +299,7 @@ final class AIQuiltCoordinator {
                 guard current == gen else { return }
                 guard let cmd = self.renderer.commandQueue.makeCommandBuffer() else { return }
                 self.renderer.updateTile(index: r.view, srcTexture: tex, cmd: cmd,
-                                         blendAlpha: alpha)
+                                         blendAlpha: alpha, lumaGain: gain)
                 cmd.commit()
             }
         }

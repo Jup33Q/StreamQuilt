@@ -35,6 +35,12 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
     public var onKeyUp: ((String) -> Void)?
     /// When non-nil, device + preview display this quilt texture instead of the main one.
     public var displaySourceOverride: (() -> MTLTexture?)?
+    /// Dual-quilt blend: returns an alt quilt texture and a lerp factor
+    /// (0 = main quilt, 1 = alt quilt). The device interlace mixes both quilts
+    /// per subpixel at identical view coordinates — a smooth layer crossfade
+    /// (e.g. AI-stylized quilt vs live raw raymarch). Preview hard-switches
+    /// to the alt quilt at mix >= 0.5.
+    public var altMixSource: (() -> (texture: MTLTexture, mix: Float)?)?
 
     public var showPreview = true
     /// Show the raw quilt on the device instead of the interlaced image (key: b).
@@ -190,8 +196,12 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
 
     public func saveLenticular(to path: String) {
         let t = currentTime()
+        let altMix = altMixSource?()
+        let fullAlt = altMix != nil && altMix!.mix >= 0.999
         renderer.saveLenticularPNG(to: path, calibration: calibration,
-                                   source: displaySourceOverride?() ?? nil) { cmd in
+                                   source: displaySourceOverride?() ?? (fullAlt ? altMix!.texture : nil),
+                                   alt: fullAlt ? nil : altMix?.texture,
+                                   altMix: fullAlt ? 0 : (altMix?.mix ?? 0)) { cmd in
             self.encodeScene(cmd: cmd, time: t)
         }
     }
@@ -238,12 +248,17 @@ private final class FrameDriver: NSObject, MTKViewDelegate {
             cmd1.commit()
 
             let cmd2 = r.commandQueue.makeCommandBuffer()!
-            let src = app.displaySourceOverride?()
+            // mix >= 0.999: sample the alt quilt directly (saves the blend fetch)
+            let altMix = app.altMixSource?()
+            let fullAlt = altMix != nil && altMix!.mix >= 0.999
+            let src = app.displaySourceOverride?() ?? (fullAlt ? altMix!.texture : nil)
             if app.bypassLenticular {
                 r.encodeTonemappedBlit(cmd: cmd2, pass: rpd, drawableSize: destSize, source: src)
             } else {
                 r.encodeLenticular(cmd: cmd2, pass: rpd, calibration: app.calibration,
-                                   drawableSize: destSize, source: src)
+                                   drawableSize: destSize, source: src,
+                                   alt: fullAlt ? nil : altMix?.texture,
+                                   altMix: fullAlt ? 0 : (altMix?.mix ?? 0))
             }
             cmd2.present(drawable)
             cmd2.addCompletedHandler { [weak self] cb in
@@ -257,8 +272,10 @@ private final class FrameDriver: NSObject, MTKViewDelegate {
                   let rpd = view.currentRenderPassDescriptor,
                   let drawable = view.currentDrawable else { return }
             if app.deviceDriverExists == false { app.encodeScene(cmd: cmd, time: t) }
-            r.encodeTonemappedBlit(cmd: cmd, pass: rpd, drawableSize: destSize,
-                                   source: app.displaySourceOverride?())
+            let altMix = app.altMixSource?()
+            let src = app.displaySourceOverride?()
+                ?? (altMix != nil && altMix!.mix >= 0.5 ? altMix!.texture : nil)
+            r.encodeTonemappedBlit(cmd: cmd, pass: rpd, drawableSize: destSize, source: src)
             cmd.present(drawable)
             cmd.commit()
             if app.deviceDriverExists == false { report() }

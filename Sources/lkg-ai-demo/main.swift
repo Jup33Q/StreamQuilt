@@ -18,9 +18,13 @@ setvbuf(stdout, nil, _IONBF, 0)
 private var gDiffusionClient: DiffusionClient?
 
 struct CLI {
-    var prompt = "vaporwave ukiyo-e woodblock print style, neon pastel city, masterpiece"
+    // N2: palette-locked prompt matching the synthwave scene (anti-flicker:
+    // shrinks style/brightness variance between AI tiles and the base layer)
+    var prompt = "synthwave retrowave landscape, bright pastel pink and cyan palette, golden sunset lighting, neon grid valley, starry sky, clean bold shapes, masterpiece"
     var workers = 2
-    var strength: Float = 0.45
+    // euler 修复后 strength 真实生效（1.0=修复前的全风格化）。0.6 = A/B 后选定：
+    // 输出贴近输入构图/色调，epoch 间跳变最小；要更强风格化用 --strength 0.8~1.0
+    var strength: Float = 0.6
     var renderSize = 512
     var dumpPath: String?
     var peekDumpPath: String?
@@ -29,6 +33,10 @@ struct CLI {
     var renderScale: Float = 1.0
     var batch = 1
     var feedback: Float = 0.3   // latent 时序粘合（防频闪）
+    var lumaNorm: Float = 1.0   // N1 tile 明度归一强度（0=关，1=输出均值拉齐输入均值）
+    var order = "wave"          // N3 更新顺序：wave 蛇形扫描波 | center 中心优先
+    var beatEpoch = true        // N4 epoch 边界对齐节拍（每 2 拍一个 epoch）
+    var altMix: Float = 0       // 常驻原始层混合比（0-1；G 键按住时平滑推到 1）
     var grid = "7x8"   // AI 路径默认 7x8=56（低算力布局）；11x6 为全规格 66
     var units = ""     // 逗号分隔，如 "all,cpu_and_gpu"；空 = 异构默认
     var audioSource = "music"   // music（Apple Music 节拍钟，默认）| mic | none
@@ -59,6 +67,10 @@ while i < args.count {
     case "--half": cli.renderScale = 0.5
     case "--batch": cli.batch = Int(args[i + 1]) ?? 1; i += 1
     case "--feedback": cli.feedback = Float(args[i + 1]) ?? 0.3; i += 1
+    case "--luma-norm": cli.lumaNorm = Float(args[i + 1]) ?? 1.0; i += 1
+    case "--order": cli.order = args[i + 1]; i += 1
+    case "--no-beat-epoch": cli.beatEpoch = false
+    case "--alt-mix": cli.altMix = Float(args[i + 1]) ?? 0; i += 1
     case "--grid": cli.grid = args[i + 1]; i += 1
     case "--units": cli.units = args[i + 1]; i += 1
     case "--audio-source": cli.audioSource = args[i + 1]; i += 1
@@ -133,6 +145,15 @@ do {
             guard let r = client.processSync(view: v, rgb: rgb, width: vs, height: vs) else {
                 print("view \(v): worker timeout, skipped"); continue
             }
+            // N1: same brightness normalization as the live coordinator
+            var gain: Float = 1
+            if cli.lumaNorm > 0 {
+                let inLuma = lumaMean(rgb, bytesPerPixel: 3)
+                let outLuma = lumaMean(r.rgba, bytesPerPixel: 4)
+                if inLuma > 1, outLuma > 1 {
+                    gain = pow(min(max(inLuma / outLuma, 0.5), 2.0), cli.lumaNorm)
+                }
+            }
             // apply result tile
             if let cmd2 = renderer.commandQueue.makeCommandBuffer() {
                 // reuse coordinator-style apply inline
@@ -145,7 +166,7 @@ do {
                                     mipmapLevel: 0, withBytes: ptr.baseAddress!,
                                     bytesPerRow: r.width * 4)
                     }
-                    renderer.updateTile(index: r.view, srcTexture: tex, cmd: cmd2)
+                    renderer.updateTile(index: r.view, srcTexture: tex, cmd: cmd2, lumaGain: gain)
                 }
                 cmd2.commit()
             }
@@ -167,6 +188,9 @@ do {
     let client = makeClient()
     let coordinator = AIQuiltCoordinator(scene: scene, renderer: app.renderer, client: client)
     coordinator.sceneTimeProvider = { app.currentTime() }
+    coordinator.lumaNormStrength = cli.lumaNorm
+    coordinator.orderMode = cli.order == "center" ? .center : .wave
+    coordinator.baseAltMix = cli.altMix
 
     // audio-reactive: Apple Music beat clock (default) or mic FFT (--audio-source mic)
     let music = MusicBridge()
@@ -174,6 +198,10 @@ do {
     if cli.audioSource == "music" {
         scene.audioProvider = { music.features }
         music.start()
+        // N4: epoch boundaries aligned to every 2nd beat
+        if cli.beatEpoch {
+            coordinator.beatClockProvider = { music.beatClock }
+        }
     } else if cli.audioSource == "mic" {
         scene.audioProvider = {
             let f = analyzer.current
@@ -183,8 +211,9 @@ do {
     }
 
     app.onRenderQuilt = { cmd, _, time in coordinator.onFrame(cmd: cmd, time: time) }
-    // hold G: peek the raw raymarch (pre-diffusion); release: back to AI quilt
-    app.displaySourceOverride = { coordinator.rawPeek ? app.renderer.altQuiltTexture : nil }
+    // dual-quilt blend: device interlace lerps AI quilt <-> raw raymarch quilt
+    // (hold G to fade to raw, release to fade back; --alt-mix sets a floor)
+    app.altMixSource = { coordinator.altMixForDisplay }
     app.onKey = { key in
         if key == "g" { coordinator.rawPeek = true; return true }
         if scene.handleKey(key) { return true }

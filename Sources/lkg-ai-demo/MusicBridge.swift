@@ -23,6 +23,15 @@ final class MusicBridge {
         return positionAtPoll + Date().timeIntervalSince(lastPollAt)
     }
 
+    /// Continuous beat clock for epoch quantization (N4): (phase in beats,
+    /// seconds per beat). nil when not playing.
+    var beatClock: (phase: Double, beatLen: Double)? {
+        guard playing else { return nil }
+        let b = Double(bpm > 0 ? bpm : 100)
+        let len = 60.0 / b
+        return (position / len, len)
+    }
+
     /// Synthetic beat-synchronized features: (bass, mid, treble, beat).
     /// When BPM is unknown, falls back to a 100 BPM metronome while playing.
     var features: SIMD4<Float> {

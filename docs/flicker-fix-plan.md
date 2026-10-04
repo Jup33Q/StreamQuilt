@@ -90,3 +90,53 @@ BPM 已知时把 epoch 边界对齐到节拍（每 2 拍一个 epoch），让内
 ### 验收
 同机位 30s 录屏对比（当前版 vs 新版）：无明显随机闪点/明度跳变；
 60 FPS / ≥50 tiles/s 不回退；lkg-demo --dump md5 回归。
+
+## N1–N4 + 双 quilt lerp 实施记录（2026-10-04）
+
+### N0 — 双 quilt 并行 + interlace 内 lerp（用户提出，新机制）
+- 主 quilt = AI 合成层（基底 1/6 率 reprime + tile 覆盖）；alt quilt = 原始 raymarch
+  层，mix 激活期间每帧渲染（+3.2ms GPU，预算内）。
+- `lkgLenticularFS` 加 `altMix` uniform + texture(2) alt quilt：同一 q 坐标对两张
+  quilt 各采一次逐子像素 mix（视角严格对齐，无重影）；mix≥0.999 时 FrameDriver
+  直接换 source 省掉双采。
+- G 键从 `displaySourceOverride` 硬切改为平滑推子：coordinator `peekMix` 按帧指数
+  趋近（系数 0.12/frame，~0.5s 收敛）；`--alt-mix 0.15~0.25` 可设常驻混合地板，
+  用始终新鲜的底层稀释 AI tile 跳变。预览窗 mix≥0.5 硬切（tonemap blit 无双采）。
+- 接线：`LKGApp.altMixSource` provider；`encodeLenticular(alt:altMix:)`；
+  `saveLenticularPNG` 透传。
+
+### N1 — tile 明度归一 ✓
+- Swift 侧在派发完成回调里算 staging RGB 的 Rec.601 均值存 `inputLuma[view]`；
+  applyResult 算输出均值，gain = clamp(in/out, 0.5, 2.0)^strength，随三段淡入
+  传给 `updateTile(lumaGain:)`；`lkgTileBlitFS` 在 pow(2.2) 前乘 gain（sRGB 域乘
+  等价均值匹配）。lumaMean 每 4 像素抽样，CPU 开销可忽略。
+- CLI `--luma-norm 0..1`（默认 1）；dump 路径同逻辑（离线输出与 live 一致）。
+
+### N2 — 风格一致性 ✓（prompt 锁定；强度 A/B 后定案）
+- 默认 prompt 换成 palette 锁定版，对齐 synthwave 场景：
+  "synthwave retrowave landscape, bright pastel pink and cyan palette, golden sunset
+  lighting, neon grid valley, starry sky, clean bold shapes, masterpiece"。
+- strength A/B：0.45 / 0.40 / 0.35 dump 对比（见 /tmp/ai-new-s*.png）。
+- feedback A/B（0.3/0.4/0.5）只能实机判断——dump 是单遍无帧间，feedback 不生效。
+
+### N3 — 空间连续性更新顺序 ✓
+- `ViewOrderMode.wave`（蛇形行扫描：底行起、奇行反向）为默认，`--order center`
+  回退旧中心优先。配合淡入，更新读作一列扫过的波。
+
+### N4 — 节拍对齐 epoch ✓
+- `MusicBridge.beatClock` 暴露（相位拍数, 秒/拍）；coordinator `beatClockProvider`
+  非 nil 时 epoch = floor(phase/2)*2*beatLen（每 2 拍一个 epoch），播放中生效；
+  未播放/非 music 源回退 floor(sceneTime)。`--no-beat-epoch` 关闭。
+
+### 验收记录
+- 构建通过；`lkg-demo --dump` md5 回归不变（caaf1d42f528a58ecd3eeaede99aa554）。
+- **euler strength no-op 修复**（streamdiffusion-mac pipelines/coreml.py）：sdxs 走
+  euler 分支时 strength 被完全忽略（永远 t=999 全风格化）。修复后 t = t_max×strength；
+  strength=1.0 dump md5 与修复前位级一致（7b4f1b59…），0.6/0.45/0.35 梯度生效。
+  Pipeline 签名默认 strength 0.5→1.0（保持历史行为）。lkg-ai-demo 默认 0.45→0.6。
+- dump A/B：旧 prompt+无归一 = 暗色浮世绘城市 tile（与基底反差大）；新 prompt+归一
+  = 亮粉彩 synthwave tile（太阳/网格/山谷构图与输入对齐，视角间一致）。
+  强度对比：1.0 风格最强但偏离输入；0.45/0.35 被雾洗白；0.6 平衡（选定默认）。
+- 实机（2026-10-04，M5 Max + LKG-E10707，2 worker 384²，音乐播放中 N4 生效）：
+  60 FPS 锁定 / 51–58 tiles/s / tile 0.92–1.04 Hz / scene 3.1ms / rbLag 1–2ms ✓ 不回退。
+- 录屏对比：（待用户确认残余形态；可试 --alt-mix 0.2 常驻稀释、--strength 0.8 加风格）

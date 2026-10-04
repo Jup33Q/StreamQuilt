@@ -170,6 +170,14 @@ ANE+GPU is the measured optimum) · `--batch N` (batched UNet, needs
 `unet_*_bN.mlpackage` — measured slower than per-view, kept for reference) ·
 `--prompt/--python/--script/--models`.
 
+Anti-flicker knobs (defaults are the tuned values): `--feedback 0.3` (per-view
+latent temporal glue) · `--luma-norm 1.0` (AI tile mean brightness pulled to its
+input frame's mean) · `--order wave|center` (serpentine scan-wave vs center-out
+update order) · `--no-beat-epoch` (disable beat-aligned refresh epochs) ·
+`--alt-mix 0-1` (permanent blend floor of the raw raymarch layer under the AI
+quilt; hold `G` to smoothly fade to the raw layer and back — the interlace
+shader lerps both quilts per subpixel at identical view coordinates).
+
 Status line reads per-tile refresh: `tile 1.38 Hz avg` = mean per-view update
 rate (`tiles/s ÷ viewCount`) — the metric that matters for the rolling-update
 quilt, since the display itself always runs at 60 Hz.
