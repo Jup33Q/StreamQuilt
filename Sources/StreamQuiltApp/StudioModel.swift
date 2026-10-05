@@ -29,7 +29,7 @@ enum AudioSourceKind: String, CaseIterable, Identifiable {
 /// the device window. All @Published mutations happen on the main thread
 /// (MTKView delegates, main-runloop timers, explicit main-queue hops).
 final class StreamQuiltModel: ObservableObject {
-    static let defaultPrompt = "synthwave retrowave landscape, bright pastel pink and cyan palette, golden sunset lighting, neon grid valley, starry sky, clean bold shapes, masterpiece"
+    static let defaultPrompt = "synthwave retrowave landscape, vivid highly saturated pink and cyan palette, golden sunset lighting, neon grid valley, starry sky, clean bold shapes, masterpiece"
 
     private let defaults = UserDefaults.standard
     private var loaded = false
@@ -451,6 +451,7 @@ final class StreamQuiltModel: ObservableObject {
             scene?.pitchProvider = nil
             scene?.slowEnergyProvider = { [weak self] in self?.groove.slowEnergy ?? 0 }
             scene?.kickEnvProvider = { [weak self] in self?.groove.kick ?? 0 }
+            scene?.accumEnergyProvider = { [weak self] in self?.groove.accum ?? 0 }
             coordinator?.beatClockProvider = { [weak self] in self?.music.beatClock }
         case .mic:
             if musicActive { music.stop(); musicActive = false }
@@ -465,6 +466,7 @@ final class StreamQuiltModel: ObservableObject {
             scene?.pitchProvider = { [weak self] in self?.analyzer.current.pitchTurns ?? 0 }
             scene?.slowEnergyProvider = { [weak self] in self?.groove.slowEnergy ?? 0 }
             scene?.kickEnvProvider = { [weak self] in self?.groove.kick ?? 0 }
+            scene?.accumEnergyProvider = { [weak self] in self?.groove.accum ?? 0 }
             coordinator?.beatClockProvider = nil
         case .system:
             // metadata (beat clock/lyrics/emotion) stays on Music.app; only the
@@ -481,6 +483,7 @@ final class StreamQuiltModel: ObservableObject {
             scene?.pitchProvider = { [weak self] in self?.sysAudio.current.pitchTurns ?? 0 }
             scene?.slowEnergyProvider = { [weak self] in self?.groove.slowEnergy ?? 0 }
             scene?.kickEnvProvider = { [weak self] in self?.groove.kick ?? 0 }
+            scene?.accumEnergyProvider = { [weak self] in self?.groove.accum ?? 0 }
             coordinator?.beatClockProvider = { [weak self] in self?.music.beatClock }
         case .none:
             if musicActive { music.stop(); musicActive = false }
@@ -490,6 +493,7 @@ final class StreamQuiltModel: ObservableObject {
             scene?.pitchProvider = nil
             scene?.slowEnergyProvider = nil
             scene?.kickEnvProvider = nil
+            scene?.accumEnergyProvider = nil
             coordinator?.beatClockProvider = nil
         }
     }

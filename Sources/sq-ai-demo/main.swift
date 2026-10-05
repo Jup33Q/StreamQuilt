@@ -25,7 +25,7 @@ private var gSystemAudio: SystemAudioAnalyzer?
 struct CLI {
     // N2: palette-locked prompt matching the synthwave scene (anti-flicker:
     // shrinks style/brightness variance between AI tiles and the base layer)
-    var prompt = "synthwave retrowave landscape, bright pastel pink and cyan palette, golden sunset lighting, neon grid valley, starry sky, clean bold shapes, masterpiece"
+    var prompt = "synthwave retrowave landscape, vivid highly saturated pink and cyan palette, golden sunset lighting, neon grid valley, starry sky, clean bold shapes, masterpiece"
     var workers = 2
     // euler 修复后 strength 真实生效（1.0=修复前的全风格化）。0.6 = A/B 后选定：
     // 输出贴近输入构图/色调，epoch 间跳变最小；要更强风格化用 --strength 0.8~1.0
@@ -142,8 +142,13 @@ func makeClient() -> DiffusionClient {
 /// --audio 0,0,0,0 (or no flag) keeps every new uniform at 0: bitwise-neutral.
 func applyAudioOverride(_ scene: AIBlockCityScene, _ a: SIMD4<Float>) {
     scene.audioProvider = { a }
-    scene.slowEnergyProvider = { min(1, max(0, a.x * 0.75 + a.y * 0.5)) }
+    // v5: phrase energy derived so offline ablation exercises slow-geometry paths
+    let slow = min(1, max(0, a.x * 0.75 + a.y * 0.5))
+    scene.slowEnergyProvider = { slow }
     scene.kickEnvProvider = { 0 }
+    // accumulated energy simulated as ~20s of this level, so the cumulative
+    // terrain sculpture + palette drift show up offline too
+    scene.accumEnergyProvider = { slow * 20 }
 }
 
 func selectSpec() -> QuiltSpec {
@@ -421,6 +426,7 @@ do {
     if cli.audioSource != "none" {
         scene.slowEnergyProvider = { groove.slowEnergy }
         scene.kickEnvProvider = { groove.kick }
+        scene.accumEnergyProvider = { groove.accum }
     }
 
     // L2 parallax lyric overlay: the device interlace samples this screen-space

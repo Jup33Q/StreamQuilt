@@ -43,6 +43,7 @@ public final class AIBlockCityScene {
         var audioPitch: Float   // tail-appended: detected pitch in hue turns (MIDI/12)
         var slowEnergy: Float   // tail-appended v5: 2-4s phrase-energy EMA
         var kickEnv: Float      // tail-appended v5: kick envelope (slow attack, fast release)
+        var accumEnergy: Float  // tail-appended v5: monotonic energy integral
     }
 
     struct ViewParams {
@@ -54,6 +55,7 @@ public final class AIBlockCityScene {
         var audioPitch: Float   // tail-appended: detected pitch in hue turns (MIDI/12)
         var slowEnergy: Float   // tail-appended v5
         var kickEnv: Float      // tail-appended v5
+        var accumEnergy: Float  // tail-appended v5
     }
 
     /// Supplies (bass, mid, treble, beat) each encode; nil = silence.
@@ -65,6 +67,8 @@ public final class AIBlockCityScene {
     /// geometry-level groove; nil = 0 (bitwise-neutral).
     public var slowEnergyProvider: (() -> Float)?
     public var kickEnvProvider: (() -> Float)?
+    /// v5: monotonic energy integral for irreversible terrain deformation.
+    public var accumEnergyProvider: (() -> Float)?
 
     public init(renderer: QuiltRenderer, viewSize: Int = 512, stagingCount: Int = 8) throws {
         self.renderer = renderer
@@ -118,6 +122,7 @@ public final class AIBlockCityScene {
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         let slow = slowEnergyProvider?() ?? 0
         let kick = kickEnvProvider?() ?? 0
+        let accum = accumEnergyProvider?() ?? 0
         // v5 pipeline engages only when the groove uniforms are live; at
         // (0, 0) the v4 pipeline produces bitwise-S5 output by construction.
         enc.setRenderPipelineState(slow > 0 || kick > 0 ? basePSO5 : basePSO)
@@ -130,7 +135,8 @@ public final class AIBlockCityScene {
             fovTan: tan(fovY / 2), pitch: pitch, aspect: spec.tileAspect,
             theme: themeBias, audioPitch: pitchProvider?() ?? 0,
             slowEnergy: slow,
-            kickEnv: kick)
+            kickEnv: kick,
+            accumEnergy: accum)
         enc.setFragmentBytes(&p, length: MemoryLayout<BaseParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -145,6 +151,7 @@ public final class AIBlockCityScene {
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         let slow = slowEnergyProvider?() ?? 0
         let kick = kickEnvProvider?() ?? 0
+        let accum = accumEnergyProvider?() ?? 0
         enc.setRenderPipelineState(slow > 0 || kick > 0 ? viewPSO5 : viewPSO)
         var p = ViewParams(
             audio: audioProvider?() ?? .zero,
@@ -154,7 +161,8 @@ public final class AIBlockCityScene {
             fovTan: tan(fovY / 2), pitch: pitch, renderSize: Float(viewSize),
             theme: themeBias, audioPitch: pitchProvider?() ?? 0,
             slowEnergy: slow,
-            kickEnv: kick)
+            kickEnv: kick,
+            accumEnergy: accum)
         enc.setFragmentBytes(&p, length: MemoryLayout<ViewParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()

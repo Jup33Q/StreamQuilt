@@ -219,6 +219,9 @@ public final class AudioDSP {
 public final class GrooveEnvelope {
     public private(set) var slowEnergy: Float = 0
     public private(set) var kick: Float = 0
+    /// Monotonic energy integral (never decreases) — drives the terrain's
+    /// irreversible cumulative deformation in the v5 scene.
+    public private(set) var accum: Float = 0
     private var lastT: CFTimeInterval?
     private var prevBeat: Float = 0
     private var kickT: CFTimeInterval = -10
@@ -231,8 +234,9 @@ public final class GrooveEnvelope {
         defer { lastT = t; prevBeat = beat }
         guard let lt = lastT else { return (0, 0) }   // first sample: no history yet
         let dt = max(0, Float(t - lt))
-        let e = min(1, max(0, bass * 0.75 + mid * 0.5))
+        let e = min(1, max(0, bass * 0.55 + mid * 0.5))
         slowEnergy += (e - slowEnergy) * (1 - exp(-dt / 3))
+        accum += dt * e
         if beat > 0.55, prevBeat <= 0.55 { kickT = t }
         let kdt = max(0, Float(t - kickT))
         kick = (1 - exp(-kdt / 0.14)) * exp(-max(0, kdt - 0.14) / 0.20)

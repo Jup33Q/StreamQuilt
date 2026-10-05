@@ -186,3 +186,14 @@ smin 球场本身只是「软球」，液体感来自表面张力、粘性流动
   v5 27.1ms @7x8；实机 system 音源 60FPS、bass 峰值 0.5+、pitch 锁定、
   blob/滴落离线矩阵（t=1.2/15/40）可见。
 - 观察：Music 实机两次自动暂停（36s/143s 处），原因未查明，非 app 行为。
+
+## S6.1 追加（2026-10-05，用户实机反馈迭代）
+
+- accumEnergy（第三个尾部 uniform，只增不减）驱动**地形不可逆累计形变**
+  （沉积 warp，warpA=min(accum*0.06,1.6) 随 accum 平移）+ **配色随播放时间
+  演化**（hueShift += accum*0.01 全局锚点 + 逐元素异速漂移）。
+- 律动淡化 + bass 全局削弱 ~50%（地形瞬时响应、melt、太阳、相机、溶球、
+  地板着色；slowEnergy bass 权重 0.75→0.55）。
+- 去泛白：场景饱和度 0.85–1.0、辉光/地平线/fog 收敛；默认 prompt
+  pastel → vivid highly saturated。
+- 回归：peek-dump 默认仍 f23068ef（v4 冻结不受影响）；sq-demo md5 不变。
