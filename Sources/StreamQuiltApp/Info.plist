@@ -4,6 +4,8 @@
 <dict>
     <key>CFBundleIdentifier</key>
     <string>dev.jup33q.streamquilt</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.graphics-design</string>
     <key>CFBundleName</key>
     <string>StreamQuilt</string>
     <key>CFBundleExecutable</key>
