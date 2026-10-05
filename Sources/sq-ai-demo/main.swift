@@ -542,6 +542,9 @@ do {
                     if !themeEngine.currentThemeEN.isEmpty {
                         s += " · " + String(themeEngine.currentThemeEN.prefix(24))
                     }
+                    if let sub = themeEngine.currentSubject {
+                        s += " · " + sub.zh
+                    }
                     s += String(format: " e%.2f", themeEngine.effectiveEnergy)
                 }
             } else {

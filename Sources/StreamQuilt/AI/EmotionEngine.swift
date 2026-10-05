@@ -134,6 +134,10 @@ public final class TrackThemeEngine {
     public private(set) var lineEmotionID = ""
     /// laya-picked lyric-overlay font set id (per track; hash pick as fallback).
     public private(set) var currentFontSetID = ""
+    /// Active subject card (S6.2); rotates slowly within its category.
+    public private(set) var currentSubject: SubjectCard?
+    public private(set) var currentSubjectZH = ""
+    private var subjectRotation = 0
     /// Fires on the main thread whenever a new track theme is produced.
     public var onTheme: ((ThemeOutput) -> Void)?
     /// Fires on the main thread when a font set is picked for the current
@@ -217,6 +221,7 @@ public final class TrackThemeEngine {
                 currentHueBias = 0; currentEnergy = 0; currentGains = SIMD3(1, 1, 1)
                 currentFontSetID = ""
                 trackEmotion = nil; lineEmotion = nil; lineEmotionProb = 0; pool = []
+                currentSubject = nil; currentSubjectZH = ""; subjectRotation = 0
             }
             return
         }
@@ -263,6 +268,8 @@ public final class TrackThemeEngine {
                         "instructions": "Pick the dominant emotion of this song."],
             // 1024-token track lane only — the 96-token ANE line lane would
             // overflow on the criteria list alone.
+            "subject": ["type": "choice", "criteria": SubjectPool.all.map { $0.id },
+                        "instructions": "Pick the foreground subject that best fits this song's imagery."],
             "fontset": ["type": "choice", "criteria": LyricFontPool.all.map { $0.id },
                         "instructions": "Pick the lyric poster font style by mood: "
                             + LyricFontPool.layaGuide],
@@ -293,6 +300,10 @@ public final class TrackThemeEngine {
                 self.lineEmotion = nil; self.lineEmotionProb = 0; self.lineEmotionID = ""
                 self.usedHashFallback = false
                 self.lastTrackID = id
+                self.subjectRotation = 0
+                self.setSubject(resp.answers["subject"].flatMap { SubjectPool.byID($0) }
+                    ?? SubjectPool.all[Self.stableIndex("subject:" + id,
+                                                        modulo: SubjectPool.all.count)])
                 // font arbitration: laya's pick, hash-stable pick if it
                 // answered with an unknown id
                 let fsID = resp.answers["fontset"].flatMap { LyricFontPool.byID($0)?.id }
@@ -372,6 +383,9 @@ public final class TrackThemeEngine {
         let emo = Emotion.all[Self.stableIndex(id, modulo: Emotion.all.count)]
         let theme = Theme.all[Self.stableIndex("theme:" + id, modulo: Theme.all.count)]
         pool = [(theme: theme, weight: 1.0)]
+        subjectRotation = 0
+        setSubject(SubjectPool.all[Self.stableIndex("subject:" + id,
+                                                    modulo: SubjectPool.all.count)])
         trackEmotion = emo
         lineEmotion = nil; lineEmotionProb = 0; lineEmotionID = ""
         usedHashFallback = true
@@ -390,6 +404,7 @@ public final class TrackThemeEngine {
     private func applyOllama(_ t: ThemeOutput) {
         pool = []
         usedHashFallback = false
+        currentSubject = nil; currentSubjectZH = ""; subjectRotation = 0
         let fsID = LyricFontPool.all[Self.stableIndex("font:" + currentMusicID,
                                                       modulo: LyricFontPool.all.count)].id
         currentFontSetID = fsID
@@ -405,6 +420,23 @@ public final class TrackThemeEngine {
         print("[emotion] \(t.emotionID) \(t.emotionZH) | “\(t.themeEN)” | hue \(String(format: "%+.2f", t.hueBias)) energy \(String(format: "%.2f", t.energy))")
         onTheme?(t)
         emitPrompt(lyricLine: lastObservedLine)
+    }
+
+    private func setSubject(_ card: SubjectCard) {
+        currentSubject = card
+        currentSubjectZH = card.zh
+        print("[emotion] subject: \(card.id) \(card.zh)")
+    }
+
+    /// Slow in-category rotation: every 8 lyric-line switches the subject
+    /// advances to the next card of the same category (deterministic, no
+    /// laya cost — the 96-token line lane never sees the pool).
+    private func rotateSubject(lyricLine: String) {
+        guard let cur = currentSubject else { return }
+        let cat = SubjectPool.category(cur.cat)
+        guard cat.count > 1, let idx = cat.firstIndex(where: { $0.id == cur.id }) else { return }
+        setSubject(cat[(idx + 1) % cat.count])
+        emitPrompt(lyricLine: lyricLine)
     }
 
     /// laya/hash path: palette anchors from the pool's top theme, energy from
@@ -435,7 +467,9 @@ public final class TrackThemeEngine {
     private func composePrompt(lyricLine: String) -> String? {
         guard let theme = Self.weightedSample(pool), let emo = lineEmotion ?? trackEmotion
         else { return nil }
-        var p = theme.prompt + ", " + emo.stylePrompt
+        var p = theme.prompt
+        if let sub = currentSubject { p += ", " + sub.prompt }
+        p += ", " + emo.stylePrompt
         let line = lyricLine.trimmingCharacters(in: .whitespacesAndNewlines)
         if !line.isEmpty { p += ", " + String(line.prefix(60)) }
         p += ", " + Theme.qualityTail
@@ -490,6 +524,12 @@ public final class TrackThemeEngine {
                 // chorus heuristic: consecutive identical / highly similar lines
                 if !prev.isEmpty, Self.similar(prev, line) {
                     chorusBoost = 0.3
+                }
+                // S6.2: subject rotation every 8 line switches
+                subjectRotation += 1
+                if subjectRotation >= 8 {
+                    subjectRotation = 0
+                    rotateSubject(lyricLine: line)
                 }
                 // lyric line switch -> laya line lane -> pool weight update
                 // (2s throttle, same as the prompt modulation contract)

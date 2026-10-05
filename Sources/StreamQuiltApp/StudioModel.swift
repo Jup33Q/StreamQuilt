@@ -519,6 +519,7 @@ final class StreamQuiltModel: ObservableObject {
             emotionLabel = themeEngine.currentEmotionID.isEmpty ? ""
                 : themeEngine.currentEmotionID
                   + (themeEngine.currentThemeZH.isEmpty ? "" : " · " + themeEngine.currentThemeZH)
+                  + (themeEngine.currentSubjectZH.isEmpty ? "" : " · " + themeEngine.currentSubjectZH)
                   + (themeEngine.lineEmotionID.isEmpty ? "" : " → " + themeEngine.lineEmotionID)
         } else {
             nowPlaying = ""
