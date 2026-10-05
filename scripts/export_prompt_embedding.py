@@ -32,7 +32,7 @@ def main():
     render_size = 384
     alt = f"sdxs-{render_size}"
     prefix = f"unet_sdxs_{render_size}"
-    models_dir = os.path.expanduser("~/Desktop/lkg-metal-quilt/models")
+    models_dir = os.path.expanduser("~/Desktop/StreamQuilt/models")
     if os.path.exists(os.path.join(models_dir, prefix + ".mlpackage")):
         MODEL_CONFIGS[alt] = {**MODEL_CONFIGS["sdxs"], "unet_prefix": prefix,
                               "render_size": render_size}

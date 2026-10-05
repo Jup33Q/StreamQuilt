@@ -42,9 +42,19 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
     /// to the alt quilt at mix >= 0.5.
     public var altMixSource: (() -> (texture: MTLTexture, mix: Float)?)?
     /// Per-frame gain on the main quilt sample at display time (device only).
-    /// lkg-ai-demo drives it from the beat clock so the AI layer pulses with
+    /// sq-ai-demo drives it from the beat clock so the AI layer pulses with
     /// the music. Default nil = 1 (bit-identical output).
     public var mainGainProvider: (() -> Float)?
+    /// Per-frame hue rotation (turns) on the main quilt sample at display time
+    /// (device only). sq-ai-demo drives it from the beat clock so rhythm reads
+    /// as a hue pulse instead of a brightness pulse. Default nil = 0.
+    public var mainHueProvider: (() -> Float)?
+    /// Screen-space overlay texture (e.g. lyric panel) sampled with per-view
+    /// parallax inside the interlace (device only). nil = no overlay.
+    public var overlayProvider: (() -> MTLTexture?)?
+    /// Full-sweep overlay shift as a fraction of screen width. Positive pops
+    /// the overlay out of the screen (flip sign to recess it).
+    public var overlayShiftFraction: Float = 0.10
 
     public var showPreview = true
     /// Show the raw quilt on the device instead of the interlaced image (key: b).
@@ -207,9 +217,12 @@ public final class LKGApp: NSObject, NSApplicationDelegate {
         let fullAlt = altMix != nil && altMix!.mix >= 0.999
         renderer.saveLenticularPNG(to: path, calibration: calibration,
                                    source: displaySourceOverride?() ?? (fullAlt ? altMix!.texture : nil),
+                                   overlay: overlayProvider?(),
+                                   overlayShift: overlayShiftFraction,
                                    alt: fullAlt ? nil : altMix?.texture,
                                    altMix: fullAlt ? 0 : (altMix?.mix ?? 0),
-                                   mainGain: mainGainProvider?() ?? 1) { cmd in
+                                   mainGain: mainGainProvider?() ?? 1,
+                                   mainHue: mainHueProvider?() ?? 0) { cmd in
             self.encodeScene(cmd: cmd, time: t)
         }
     }
@@ -265,9 +278,12 @@ private final class FrameDriver: NSObject, MTKViewDelegate {
             } else {
                 r.encodeLenticular(cmd: cmd2, pass: rpd, calibration: app.calibration,
                                    drawableSize: destSize, source: src,
+                                   overlay: app.overlayProvider?(),
+                                   overlayShift: app.overlayShiftFraction,
                                    alt: fullAlt ? nil : altMix?.texture,
                                    altMix: fullAlt ? 0 : (altMix?.mix ?? 0),
-                                   mainGain: app.mainGainProvider?() ?? 1)
+                                   mainGain: app.mainGainProvider?() ?? 1,
+                                   mainHue: app.mainHueProvider?() ?? 0)
             }
             cmd2.present(drawable)
             cmd2.addCompletedHandler { [weak self] cb in

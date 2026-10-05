@@ -47,7 +47,7 @@ worker `--feedback` 默认 0.15 → 0.3（latent 帧间混合比例）；Diffusi
 ### 验收
 - 录像对比：同机位 10s 录屏，无可见随机闪点；epoch 间过渡柔和。
 - 指标不回退：60 FPS / ≥50 tiles/s。
-- `lkg-demo --dump` md5 回归不变。
+- `sq-demo --dump` md5 回归不变。
 
 ## 实施与验收记录（2026-10-04 完成）
 
@@ -89,7 +89,7 @@ BPM 已知时把 epoch 边界对齐到节拍（每 2 拍一个 epoch），让内
 
 ### 验收
 同机位 30s 录屏对比（当前版 vs 新版）：无明显随机闪点/明度跳变；
-60 FPS / ≥50 tiles/s 不回退；lkg-demo --dump md5 回归。
+60 FPS / ≥50 tiles/s 不回退；sq-demo --dump md5 回归。
 
 ## N1–N4 + 双 quilt lerp 实施记录（2026-10-04）
 
@@ -145,15 +145,15 @@ tiles/s 52→63。
 改在显示级做：interlace 加 `mainGain` uniform（仅乘主 quilt 采样，alt 层不动），
 由与场景 uniform 同一个节拍钟 60Hz 驱动：`1 + beatGlow*beatPulse`，
 默认 `--beat-glow 0.25`。整层随节拍平滑呼吸，与动画严格同相。
-lkg-demo 默认 1（c×1.0 位级不变，md5 回归已验）。
+sq-demo 默认 1（c×1.0 位级不变，md5 回归已验）。
 另：peek 期间 alt 层降为 1/2 帧率渲染（全速时 GPU 抢占会把 tiles/s 腰斩到 13）。
 
 ### 验收记录
-- 构建通过；`lkg-demo --dump` md5 回归不变（caaf1d42f528a58ecd3eeaede99aa554）。
+- 构建通过；`sq-demo --dump` md5 回归不变（caaf1d42f528a58ecd3eeaede99aa554）。
 - **euler strength no-op 修复**（streamdiffusion-mac pipelines/coreml.py）：sdxs 走
   euler 分支时 strength 被完全忽略（永远 t=999 全风格化）。修复后 t = t_max×strength；
   strength=1.0 dump md5 与修复前位级一致（7b4f1b59…），0.6/0.45/0.35 梯度生效。
-  Pipeline 签名默认 strength 0.5→1.0（保持历史行为）。lkg-ai-demo 默认 0.45→0.6。
+  Pipeline 签名默认 strength 0.5→1.0（保持历史行为）。sq-ai-demo 默认 0.45→0.6。
 - dump A/B：旧 prompt+无归一 = 暗色浮世绘城市 tile（与基底反差大）；新 prompt+归一
   = 亮粉彩 synthwave tile（太阳/网格/山谷构图与输入对齐，视角间一致）。
   强度对比：1.0 风格最强但偏离输入；0.45/0.35 被雾洗白；0.6 平衡（选定默认）。

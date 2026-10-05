@@ -1,24 +1,25 @@
 #!/bin/bash
 # Build release binaries and wrap them in minimal .app bundles so macOS privacy
 # permissions (microphone, automation) have an Info.plist to read.
-#   .build/LKG-AI-Demo.app/Contents/MacOS/lkg-ai-demo [args]
-#   ".build/LKG Studio.app/Contents/MacOS/lkg-studio"
+#   .build/StreamQuilt-AI-Demo.app/Contents/MacOS/sq-ai-demo [args]
+#   ".build/StreamQuilt.app/Contents/MacOS/streamquilt"
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 swift build -c release
 
-APP=.build/LKG-AI-Demo.app
+APP=.build/StreamQuilt-AI-Demo.app
 mkdir -p "$APP/Contents/MacOS"
-cp .build/release/lkg-ai-demo "$APP/Contents/MacOS/lkg-ai-demo"
-cp Sources/lkg-ai-demo/Info.plist "$APP/Contents/Info.plist"
+cp .build/release/sq-ai-demo "$APP/Contents/MacOS/sq-ai-demo"
+cp Sources/sq-ai-demo/Info.plist "$APP/Contents/Info.plist"
 
-STUDIO=".build/LKG Studio.app"
-mkdir -p "$STUDIO/Contents/MacOS"
-cp .build/release/lkg-studio "$STUDIO/Contents/MacOS/lkg-studio"
-cp Sources/lkg-studio/Info.plist "$STUDIO/Contents/Info.plist"
+APPDIR=".build/StreamQuilt.app"
+mkdir -p "$APPDIR/Contents/MacOS" "$APPDIR/Contents/Resources"
+cp .build/release/streamquilt "$APPDIR/Contents/MacOS/streamquilt"
+cp Sources/StreamQuiltApp/Info.plist "$APPDIR/Contents/Info.plist"
+cp assets/AppIcon.icns "$APPDIR/Contents/Resources/AppIcon.icns"
 
 echo "built: $APP"
-echo "run:   $APP/Contents/MacOS/lkg-ai-demo"
-echo "built: $STUDIO"
-echo "run:   \"$STUDIO/Contents/MacOS/lkg-studio\""
+echo "run:   $APP/Contents/MacOS/sq-ai-demo"
+echo "built: $APPDIR"
+echo "run:   \"$APPDIR/Contents/MacOS/streamquilt\""

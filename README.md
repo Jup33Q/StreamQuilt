@@ -1,4 +1,10 @@
-# lkg-metal-quilt
+# StreamQuilt
+
+![Platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Apple%20Silicon-blue)
+![Swift](https://img.shields.io/badge/Swift-6.4-orange?logo=swift)
+![Renderer](https://img.shields.io/badge/renderer-Metal-black)
+![AI](https://img.shields.io/badge/AI-CoreML%20%C2%B7%20ANE%2BGPU-purple)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 Real-time quilt rendering for Looking Glass light field displays, in pure Swift + Metal.
 
@@ -32,18 +38,56 @@ at full 4092x4092 quilt resolution.
 
 ## Requirements
 
-- macOS on Apple Silicon (tested on M5 Max, macOS 26/27)
+- **macOS on Apple Silicon** (tested on M5 Max, macOS 26/27) — see
+  [Platform support](#platform-support): Windows and Linux are not supported
 - Swift toolchain — Command Line Tools is enough (shaders are compiled at
   runtime; no Xcode needed)
 - A Looking Glass display connected as a screen
 - [Looking Glass Bridge](https://lookingglassfactory.com/software) running
   (for exact per-device calibration; optional but recommended)
 
+## Platform support
+
+**macOS (Apple Silicon) only.** The renderer is Metal, the app shell is AppKit,
+calibration comes from the macOS build of Looking Glass Bridge, and the AI demo
+runs on CoreML (ANE + GPU). There is no Windows or Linux build and no active
+port — the whole pipeline (Metal raymarch, CoreML inference, AppleScript music
+bridge) is Apple-platform technology end to end.
+
+## Deployment
+
+```sh
+swift build -c release      # CLI binaries: .build/release/{sq-demo,sq-ai-demo,streamquilt}
+bash scripts/build_app.sh   # wraps them into .app bundles (Info.plist needed for
+                            # mic / Automation permission prompts):
+                            #   .build/StreamQuilt.app           — Studio GUI
+                            #   .build/StreamQuilt-AI-Demo.app   — sq-ai-demo
+cp -R .build/StreamQuilt.app ~/Desktop/      # or /Applications — TCC permissions
+                                             # survive binary updates (same bundle id)
+```
+
+Runtime permissions: **Microphone** (only for `--audio-source mic`) and
+**Automation → Music.app** (Now Playing metadata + playback control for the
+default audio-reactive mode). Looking Glass Bridge must be running for
+per-device calibration (built-in fallback exists for one LKG Go unit).
+
+## Measured memory footprint
+
+M5 Max, macOS 27, steady state (RSS via `ps`; footprint via `footprint`):
+
+| Process | Memory |
+|---|---|
+| `sq-demo` (66-view live, 4092² quilt) | ~90 MB |
+| `sq-ai-demo` app process | ~235 MB RSS / ~680 MB footprint (fp16 quilts + staging + AI tiles) |
+| diffusion worker (each, CoreML SDXS loaded) | ~1.5 GB |
+| laya emotion worker (optional, `--no-emotion-engine` to disable) | ~1.7 GB |
+| **sq-ai-demo total** (default: 2 workers + laya) | **~5.0 GB** |
+
 ## Run the demo
 
 ```sh
-swift run -c release lkg-demo                 # live: fullscreen on LKG + preview window
-swift run -c release lkg-demo -- --no-preview # device only
+swift run -c release sq-demo                 # live: fullscreen on LKG + preview window
+swift run -c release sq-demo -- --no-preview # device only
 ```
 
 Keys (focus the preview window first):
@@ -64,8 +108,8 @@ Keys (focus the preview window first):
 Offline frame export:
 
 ```sh
-swift run -c release lkg-demo -- --dump quilt_qs11x6a0.56.png --time 1.2
-swift run -c release lkg-demo -- --dump-lentic lenticular.png
+swift run -c release sq-demo -- --dump quilt_qs11x6a0.56.png --time 1.2
+swift run -c release sq-demo -- --dump-lentic lenticular.png
 ```
 
 Quilt PNGs follow the QuiltPlayer naming convention and can be opened in
@@ -75,11 +119,11 @@ QuiltPlayer / Looking Glass Studio directly.
 
 ```swift
 // Package.swift
-.package(url: "https://github.com/Jup33Q/lkg-metal-quilt.git", from: "0.1.0")
+.package(url: "https://github.com/Jup33Q/StreamQuilt.git", from: "0.1.0")
 ```
 
 ```swift
-import LKGQuilt
+import StreamQuilt
 
 let app = try LKGApp(spec: .lkgGo)        // finds the LKG screen, fetches calibration
 app.onRenderQuilt = { cmd, pass, time in
@@ -101,7 +145,7 @@ Prepend `LKGShaderCommon.msl` to your fragment shader source; it provides:
   camera ray (focus plane at z = 0)
 
 Then render one fullscreen triangle into `renderer.makeQuiltPassDescriptor()`
-with an `rgba16Float` target. See `Sources/lkg-demo/BlockCityScene.swift` for a
+with an `rgba16Float` target. See `Sources/sq-demo/BlockCityScene.swift` for a
 complete example.
 
 ### Lower-level API
@@ -127,7 +171,7 @@ Measured on Apple M5 Max, Looking Glass Go, full 4092x4092 quilt:
 The interlace pass reads the full quilt texture with scattered tile access;
 keep the quilt as rgba16Float in private storage and avoid extra copies.
 
-## AI demo: StreamDiffusion-stylized quilt (lkg-ai-demo)
+## AI demo: StreamDiffusion-stylized quilt (sq-ai-demo)
 
 Raymarched views are piped through StreamDiffusion (CoreML img2img) per view and
 composited back into the quilt — an AI-stylized hologram, live.
@@ -158,10 +202,10 @@ python3 scripts/convert_unet_coreml.py --snapshot <IDKiro/sdxs-512-0.9 snapshot 
 ### Run
 
 ```sh
-swift run -c release lkg-ai-demo                                   # live: 2 workers, 384px, 7x8
-swift run -c release lkg-ai-demo -- --workers 3 --render-size 512  # beefier
-swift run -c release lkg-ai-demo -- --dump ai-quilt.png            # offline quilt PNG
-swift run -c release lkg-ai-demo -- --prompt "watercolor painting" # custom style
+swift run -c release sq-ai-demo                                   # live: 2 workers, 384px, 7x8
+swift run -c release sq-ai-demo -- --workers 3 --render-size 512  # beefier
+swift run -c release sq-ai-demo -- --dump ai-quilt.png            # offline quilt PNG
+swift run -c release sq-ai-demo -- --prompt "watercolor painting" # custom style
 ```
 
 Flags: `--workers N` · `--render-size 320/384/512` · `--strength 0-1` ·
@@ -177,9 +221,15 @@ update order) · `--no-beat-epoch` (disable beat-aligned refresh epochs) ·
 `--alt-mix 0-1` (permanent blend floor of the raw raymarch layer under the AI
 quilt; hold `G` to smoothly fade to the raw layer and back — the interlace
 shader lerps both quilts per subpixel at identical view coordinates) ·
-`--beat-glow 0.25` (display-level beat pulse on the AI layer only — the
-interlace scales the main quilt by `1 + beatGlow*beatPulse`, driven by the same
-beat clock as the scene uniforms, so the whole AI layer breathes in sync).
+`--beat-hue 0.06` (display-level beat pulse on the AI layer only, as a HUE
+rotation of the main quilt — rhythm reads as color swing, not brightness
+flicker; `--beat-glow` remains as a legacy brightness-pulse option, default 0) ·
+`--overlay-shift 0.10` (lyric-overlay parallax amplitude).
+
+Offline/debug helpers: `--audio b,m,t,bt` injects fixed audio uniforms into any
+dump mode (A/B ablation of audio-reactive looks without Music) ·
+`--bench-base N` GPU-times N base-scene raymarch encodes (serialized command
+buffers — queued submissions inflate GPU timestamps ~20x).
 
 The main quilt is a persistent AI composite: the raymarch base primes it once
 at startup and never wipes it again (a periodic full-quilt `dontCare` pass
@@ -206,11 +256,19 @@ Apple Music's PCM is DRM-protected — MusicKit cannot hand us audio buffers. In
 - **`AudioAnalyzer`** (`--audio-source mic`): real mic FFT (AVAudioEngine + vDSP),
   band energies + spectral-flux onsets — works with any audible source.
   Requires the app-bundled build for the mic permission prompt:
-  `bash scripts/build_app.sh`, then run `.build/LKG-AI-Demo.app/Contents/MacOS/lkg-ai-demo`.
+  `bash scripts/build_app.sh`, then run `.build/StreamQuilt-AI-Demo.app/Contents/MacOS/sq-ai-demo`.
 
-Shader effects: bass pumps block heights, beat flashes glow/sky and jumps the orbit
-cube, treble shifts the palette. Diffusion inputs get the same uniforms, so AI tiles
-inherit the audio sync.
+Scene v4 shader effects: the sun drifts on a lissajous path with lava-ball
+surface displacement and wax drips, the mandelbox crystal orbits slowly behind
+the focus plane with melt domain-warp, the terrain flows bidirectionally with
+an advected neon grid, the corridor centerline snakes with z, and the camera
+drifts autonomously (the scene keeps breathing with the music paused). A
+unified `melt` scalar (bass/mid-driven) gates all softening — quiet passages
+settle back to hard surfaces. Beat drives HUE swings (palette kick + display
+hue rotation), not brightness flashes; final output is capped at 0.7 luminance
+and darker sun/crystal regions blend into the sky (luminance-keyed
+transparency). A parallax lyric overlay (liquid-glass karaoke text, track
+progress bar) is sampled per-view inside the interlace.
 
 ### Migration tracks (M3/M4 conclusions)
 

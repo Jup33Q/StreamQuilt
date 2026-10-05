@@ -2,34 +2,34 @@
 import PackageDescription
 
 let package = Package(
-    name: "LKGQuilt",
+    name: "StreamQuilt",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "LKGQuilt", targets: ["LKGQuilt"]),
-        .executable(name: "lkg-demo", targets: ["lkg-demo"]),
-        .executable(name: "lkg-ai-demo", targets: ["lkg-ai-demo"]),
-        .executable(name: "lkg-studio", targets: ["lkg-studio"]),
+        .library(name: "StreamQuilt", targets: ["StreamQuilt"]),
+        .executable(name: "sq-demo", targets: ["sq-demo"]),
+        .executable(name: "sq-ai-demo", targets: ["sq-ai-demo"]),
+        .executable(name: "streamquilt", targets: ["StreamQuiltApp"]),
     ],
     targets: [
         .target(
-            name: "LKGQuilt",
-            path: "Sources/LKGQuilt"
+            name: "StreamQuilt",
+            path: "Sources/StreamQuilt"
         ),
         .executableTarget(
-            name: "lkg-demo",
-            dependencies: ["LKGQuilt"],
-            path: "Sources/lkg-demo"
+            name: "sq-demo",
+            dependencies: ["StreamQuilt"],
+            path: "Sources/sq-demo"
         ),
         .executableTarget(
-            name: "lkg-ai-demo",
-            dependencies: ["LKGQuilt"],
-            path: "Sources/lkg-ai-demo",
+            name: "sq-ai-demo",
+            dependencies: ["StreamQuilt"],
+            path: "Sources/sq-ai-demo",
             exclude: ["Info.plist"]
         ),
         .executableTarget(
-            name: "lkg-studio",
-            dependencies: ["LKGQuilt"],
-            path: "Sources/lkg-studio",
+            name: "StreamQuiltApp",
+            dependencies: ["StreamQuilt"],
+            path: "Sources/StreamQuiltApp",
             exclude: ["Info.plist"]
         ),
     ]

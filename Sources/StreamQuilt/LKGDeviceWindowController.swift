@@ -29,6 +29,15 @@ public final class LKGDeviceWindowController: NSObject {
     public var altMixSource: (() -> (texture: MTLTexture, mix: Float)?)?
     /// Per-frame gain on the main quilt sample at display time. Default nil = 1.
     public var mainGainProvider: (() -> Float)?
+    /// Per-frame hue rotation (turns) on the main quilt sample at display time.
+    /// Default nil = 0.
+    public var mainHueProvider: (() -> Float)?
+    /// Screen-space overlay texture (e.g. lyric panel) sampled with per-view
+    /// parallax inside the interlace. nil = no overlay.
+    public var overlayProvider: (() -> MTLTexture?)?
+    /// Full-sweep overlay shift as a fraction of screen width. Positive pops
+    /// the overlay out of the screen (flip sign to recess it).
+    public var overlayShiftFraction: Float = 0.10
     /// Show the raw quilt on the device instead of the interlaced image.
     public var bypassLenticular = false
     /// Render the per-view flat-color calibration test pattern.
@@ -48,6 +57,10 @@ public final class LKGDeviceWindowController: NSObject {
     public static var deviceScreen: NSScreen? { LKGApp.findLKGScreen() }
 
     public var isShowing: Bool { window != nil }
+
+    /// Device view drawable size in pixels (nil while the window is hidden).
+    /// The overlay renderer sizes its texture from this.
+    public var drawableSize: CGSize? { (window?.contentView as? MTKView)?.drawableSize }
 
     /// Open the fullscreen window on the LKG panel.
     /// Returns false when no LKG screen is connected.
@@ -114,9 +127,12 @@ public final class LKGDeviceWindowController: NSObject {
             } else {
                 r.encodeLenticular(cmd: cmd2, pass: rpd, calibration: c.calibration,
                                    drawableSize: destSize, source: src,
+                                   overlay: c.overlayProvider?(),
+                                   overlayShift: c.overlayShiftFraction,
                                    alt: fullAlt ? nil : altMix?.texture,
                                    altMix: fullAlt ? 0 : (altMix?.mix ?? 0),
-                                   mainGain: c.mainGainProvider?() ?? 1)
+                                   mainGain: c.mainGainProvider?() ?? 1,
+                                   mainHue: c.mainHueProvider?() ?? 0)
             }
             cmd2.present(drawable)
             cmd2.commit()

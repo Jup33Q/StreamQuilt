@@ -1,7 +1,7 @@
 import Metal
 import simd
 
-/// AI path scene: same raymarched block city as lkg-demo, but with two outputs:
+/// AI path scene: same raymarched block city as sq-demo, but with two outputs:
 /// - `encodeBase`: fast full-quilt HDR render (the 60fps 3D backbone layer)
 /// - `encodeView`: one view into a square LDR staging texture, as img2img input
 ///

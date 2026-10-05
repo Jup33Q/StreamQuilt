@@ -6,7 +6,7 @@ import SwiftUI
 /// would show it). Scene encoding happens here only while the device window
 /// is hidden — when the LKG panel is live, its driver owns the frame.
 struct QuiltPreviewView: NSViewRepresentable {
-    let model: StudioModel
+    let model: StreamQuiltModel
 
     func makeNSView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero,
@@ -24,8 +24,8 @@ struct QuiltPreviewView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
     final class Coordinator: NSObject, MTKViewDelegate {
-        let model: StudioModel
-        init(model: StudioModel) { self.model = model }
+        let model: StreamQuiltModel
+        init(model: StreamQuiltModel) { self.model = model }
         func draw(in view: MTKView) { model.drawPreviewFrame(view) }
         func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
     }

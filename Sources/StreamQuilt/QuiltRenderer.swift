@@ -206,7 +206,7 @@ public final class QuiltRenderer {
                                  source: MTLTexture? = nil,
                                  overlay: MTLTexture? = nil, overlayShift: Float = 0,
                                  alt: MTLTexture? = nil, altMix: Float = 0,
-                                 mainGain: Float = 1) {
+                                 mainGain: Float = 1, mainHue: Float = 0) {
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         enc.setRenderPipelineState(lenticularPSO)
         enc.setFragmentTexture(source ?? quiltTexture, index: 0)
@@ -219,6 +219,7 @@ public final class QuiltRenderer {
         lp.overlayShift = overlayShift
         lp.altMix = alt != nil ? altMix : 0
         lp.mainGain = mainGain
+        lp.mainHue = mainHue
         enc.setFragmentBytes(&lp, length: MemoryLayout<LenticularUniforms>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -260,8 +261,9 @@ public final class QuiltRenderer {
     /// (for inspecting the optical transformation off-device).
     public func saveLenticularPNG(to path: String, calibration: Calibration,
                                   source: MTLTexture? = nil,
+                                  overlay: MTLTexture? = nil, overlayShift: Float = 0,
                                   alt: MTLTexture? = nil, altMix: Float = 0,
-                                  mainGain: Float = 1,
+                                  mainGain: Float = 1, mainHue: Float = 0,
                                   encodeQuilt: (MTLCommandBuffer) -> Void) {
         let w = Int(calibration.screenW), h = Int(calibration.screenH)
         let d = MTLTextureDescriptor.texture2DDescriptor(
@@ -277,7 +279,8 @@ public final class QuiltRenderer {
         pass.colorAttachments[0].storeAction = .store
         encodeLenticular(cmd: cmd, pass: pass, calibration: calibration,
                          drawableSize: SIMD2(Float(w), Float(h)), source: source,
-                         alt: alt, altMix: altMix, mainGain: mainGain)
+                         overlay: overlay, overlayShift: overlayShift,
+                         alt: alt, altMix: altMix, mainGain: mainGain, mainHue: mainHue)
         cmd.commit()
         cmd.waitUntilCompleted()
         writePNG(texture: tex, to: path)

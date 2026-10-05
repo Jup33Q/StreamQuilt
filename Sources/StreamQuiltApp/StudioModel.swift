@@ -1,13 +1,14 @@
 import Foundation
+import AppKit
 import Metal
 import MetalKit
 import QuartzCore
-import LKGQuilt
+import StreamQuilt
 
 /// Signal handlers can't capture context — keep a global for cleanup
-/// (same pattern as lkg-ai-demo's main.swift; SIGTERM would orphan the
+/// (same pattern as sq-ai-demo's main.swift; SIGTERM would orphan the
 /// Python workers otherwise).
-private var gStudioModel: StudioModel?
+private var gStreamQuiltModel: StreamQuiltModel?
 
 enum AudioSourceKind: String, CaseIterable, Identifiable {
     case music, mic, none
@@ -21,12 +22,12 @@ enum AudioSourceKind: String, CaseIterable, Identifiable {
     }
 }
 
-/// View model for LKG Studio. Owns the single live QuiltRenderer (only one
+/// View model for StreamQuilt. Owns the single live QuiltRenderer (only one
 /// per process — a second instance silently splits render targets and shows
 /// black), the AI pipeline (scene/client/coordinator), audio linkage, and
 /// the device window. All @Published mutations happen on the main thread
 /// (MTKView delegates, main-runloop timers, explicit main-queue hops).
-final class StudioModel: ObservableObject {
+final class StreamQuiltModel: ObservableObject {
     static let defaultPrompt = "synthwave retrowave landscape, bright pastel pink and cyan palette, golden sunset lighting, neon grid valley, starry sky, clean bold shapes, masterpiece"
 
     private let defaults = UserDefaults.standard
@@ -34,8 +35,8 @@ final class StudioModel: ObservableObject {
 
     // MARK: - Persisted configuration (S3)
 
-    @Published var prompt = StudioModel.defaultPrompt
-    @Published var recentPrompts: [String] = []
+    /// Initial worker prompt (used until the emotion engine's first compose).
+    @Published var prompt = StreamQuiltModel.defaultPrompt
     @Published var strength: Float = 0.6
     @Published var renderSize = 384
     @Published var workers = 2
@@ -44,11 +45,15 @@ final class StudioModel: ObservableObject {
         didSet { if loaded, audioSource != oldValue { applyAudioSource(); persistConfig() } }
     }
     @Published var lyricPrompt = true { didSet { if loaded { persistConfig() } } }
-    @Published var beatGlow: Float = 0.25 { didSet { if loaded { persistConfig() } } }
+    @Published var beatGlow: Float = 0 { didSet { if loaded { persistConfig() } } }
+    /// Display-level beat HUE pulse amplitude in turns (rhythm -> hue, not brightness).
+    @Published var beatHue: Float = 0.06 { didSet { if loaded { persistConfig() } } }
     /// Permanent raw-layer blend floor (CLI --alt-mix equivalent).
     @Published var altMix: Float = 0 {
         didSet { coordinator?.baseAltMix = altMix; if loaded { persistConfig() } }
     }
+    /// Parallax lyric overlay on the device (L2). Default on.
+    @Published var lyricOverlay = true { didSet { if loaded { persistConfig() } } }
 
     // MARK: - Runtime status
 
@@ -59,10 +64,15 @@ final class StudioModel: ObservableObject {
     @Published private(set) var pipelineLoading = false
     @Published private(set) var nowPlaying = ""
     @Published private(set) var lyricLine = ""
+    /// In-line progress 0...1 from the lyric line window (L2 overlay / UI bar).
+    @Published private(set) var lineProgress: Double = 0
     @Published private(set) var playing = false
     @Published private(set) var bpm = 0
     @Published private(set) var deviceAvailable = true
     @Published private(set) var lastError = ""
+    /// Effective prompt most recently pushed to the workers (engine-composed
+    /// or manual) — live readout for the UI.
+    @Published private(set) var livePrompt = ""
     /// 情感引擎当前判定（emotion id · theme_en），供 UI 展示。
     @Published private(set) var emotionLabel = ""
 
@@ -82,14 +92,20 @@ final class StudioModel: ObservableObject {
     private let music = MusicBridge()
     private let analyzer = AudioAnalyzer()
     private let lyrics = LyricsService()
-    /// 情感引擎（等价 lkg-ai-demo --emotion-engine）：曲目主题 → prompt 中段 + 场景 theme。
-    private let themeEngine = TrackThemeEngine(ollama: OllamaClient())
+    /// 情感引擎（laya 本地决策模型：整曲主题 top-5 权重池 + 逐行情感滞后切换）。
+    private let themeEngine = TrackThemeEngine()
+    private var layaClient: LayaClient?
     private var musicActive = false
     private var micActive = false
 
     private var startTime = CACurrentMediaTime()
     private var started = false
     private var statsTimer: Timer?
+    private var overlayTimer: Timer?
+    /// L2 parallax lyric overlay: text+progress fed by a 0.25s timer, sampled
+    /// by the device interlace via `LKGDeviceWindowController.overlayProvider`.
+    private var overlayRenderer: LyricOverlayRenderer?
+    private var keyMonitor: Any?
     private var previewFrames = 0
     private var previewLastReport = CACurrentMediaTime()
 
@@ -100,6 +116,9 @@ final class StudioModel: ObservableObject {
     private var appliedGrid = "7x8"
 
     private let pythonPath = NSString(string: "~/Documents/kimi/workspace/streamdiffusion-mac/.venv/bin/python").expandingTildeInPath
+    private let layaPythonPath = NSString(string: "~/Documents/kimi/workspace/laya-coreml/.venv/bin/python").expandingTildeInPath
+    private let layaModelsDir = NSString(string: "~/Documents/kimi/workspace/laya-coreml/models").expandingTildeInPath
+    private let repoRootPath: String
     private let scriptPath: String
     private let modelsDir: String
 
@@ -114,6 +133,7 @@ final class StudioModel: ObservableObject {
         // default paths relative to the package root (same trick as main.swift)
         let repoRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().path
+        repoRootPath = repoRoot
         scriptPath = repoRoot + "/python/quilt_diffusion_worker.py"
         modelsDir = repoRoot + "/models"
         loadPersisted()
@@ -131,24 +151,63 @@ final class StudioModel: ObservableObject {
             print("Bridge unavailable — using built-in fallback calibration")
         }
         rebuildPipeline()
-        lyrics.attach(music: music) { [weak self] line in self?.lyricLineChanged(line) }
+        // 歌词服务只负责行跟踪（引擎 0.5s 轮询它并驱动 prompt/权重更新）
+        lyrics.attach(music: music) { _ in }
+        // laya sidecar（7-26s 模型加载，常驻进程；没 ready 时引擎走 hash 兜底）
+        let lc = LayaClient(pythonPath: layaPythonPath,
+                            scriptPath: repoRootPath + "/python/laya_emotion_worker.py",
+                            trackModel: layaModelsDir + "/multilingual",
+                            lineModel: layaModelsDir + "/multilingual-ane")
+        lc.start()
+        layaClient = lc
+        themeEngine.brain = .laya
+        themeEngine.laya = lc
+        lc.onReady = { [weak themeEngine] in themeEngine?.layaReady() }
         themeEngine.onTheme = { [weak self] t in
             self?.scene?.themeBias = SIMD4(t.hueBias, t.crystalGain, t.columnGain, t.emberGain)
+        }
+        themeEngine.onFontSet = { [weak self] id in
+            guard let self, let fs = LyricFontPool.byID(id) else { return }
+            self.overlayRenderer?.applyFontSet(fs)
+            print("[overlay] fontset -> \(id)")
+        }
+        themeEngine.onPrompt = { [weak self] p in
+            guard let self, self.lyricPrompt else { return }
+            self.livePrompt = p
+            self.client?.setPrompt(p)
         }
         themeEngine.attach(music: music, lyrics: lyrics)
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.refreshStats()
         }
-        gStudioModel = self
-        signal(SIGTERM) { _ in gStudioModel?.shutdown(); exit(0) }
-        signal(SIGINT) { _ in gStudioModel?.shutdown(); exit(0) }
+        // L2 overlay feed: line window from LyricsService + MusicBridge
+        // position extrapolation; bar redraws at 4 Hz, text only on change.
+        overlayRenderer = renderer.map { LyricOverlayRenderer(device: $0.device) }
+        overlayTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            self?.feedOverlay()
+        }
+        gStreamQuiltModel = self
+        signal(SIGTERM) { _ in gStreamQuiltModel?.shutdown(); exit(0) }
+        signal(SIGINT) { _ in gStreamQuiltModel?.shutdown(); exit(0) }
+        // Hold-G raw-layer peek (CLI demo parity). Handled keys must return
+        // nil or AppKit plays the "invalid input" beep; never steal keys from
+        // a text field (the prompt editor) — the field editor is an NSTextView.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] ev in
+            guard let self, ev.keyCode == 5, !ev.modifierFlags.contains(.command) else { return ev }
+            if let fr = NSApp.keyWindow?.firstResponder, fr is NSTextView { return ev }
+            self.coordinator?.rawPeek = (ev.type == .keyDown)
+            return nil
+        }
     }
 
     func shutdown() {
         persistConfig()
         statsTimer?.invalidate()
+        overlayTimer?.invalidate()
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
         lyrics.stop()
         themeEngine.stop()
+        layaClient?.stop()
         music.stop()
         analyzer.stop()
         client?.stopAll()
@@ -228,10 +287,49 @@ final class StudioModel: ObservableObject {
         dw.onRenderQuilt = { [weak self] cmd, t in self?.encodeSceneFrame(cmd: cmd, time: t) }
         dw.timeProvider = { [weak self] in self?.currentTime ?? 0 }
         dw.altMixSource = { [weak self] in self?.coordinator?.altMixForDisplay }
-        dw.mainGainProvider = { [weak self] in self?.displayGain() ?? 1 }
+        dw.mainGainProvider = { [weak self] in
+            guard let self, self.beatGlow > 0 else { return 1 }
+            return self.displayGain()
+        }
+        dw.mainHueProvider = { [weak self] in self?.displayHue() ?? 0 }
+        dw.overlayProvider = { [weak self] in
+            guard let self, self.lyricOverlay, self.audioSource == .music, self.playing
+            else { return nil }
+            return self.overlayRenderer?.texture
+        }
         dw.testPattern = testPattern
         dw.bypassLenticular = bypassLenticular
         dw.onFPS = { [weak self] f in self?.fps = f }
+    }
+
+    /// 0.25s feed for the lyric overlay + the UI line-progress bar. Line window
+    /// from LRCLIB timestamps, coverage from MusicBridge position extrapolation.
+    /// The overlay footer bar shows TRACK progress; the lyric line progress
+    /// drives the karaoke coverage sweep. No lyrics / instrumental: the track
+    /// title is shown instead (coverage 0).
+    private func feedOverlay() {
+        var title = ""
+        var subtitle = ""
+        if audioSource == .music && playing {
+            let pos = music.position
+            if let win = lyrics.currentLineWindow(at: pos) {
+                title = win.text
+                subtitle = music.line
+            } else {
+                title = music.line  // no lyrics / instrumental: track title
+            }
+        }
+        lineProgress = 0  // karaoke coverage disabled (line-window sync drifts); UI bar idle
+        guard lyricOverlay, !title.isEmpty,
+              let ov = overlayRenderer, let size = deviceWindow?.drawableSize
+        else { return }
+        let trackProg = music.duration > 0 ? music.position / music.duration : 0
+        ov.update(title: title, subtitle: subtitle,
+                  progress: Float(min(max(trackProg, 0), 1)),
+                  coverage: 1,   // interface kept; fixed fully-lit until sync improves
+                  timecode: LyricOverlayRenderer.timecode(position: music.position,
+                                                          duration: music.duration),
+                  drawableSize: size)
     }
 
     /// Scene encode shared by the device window and (when the device window is
@@ -245,15 +343,23 @@ final class StudioModel: ObservableObject {
         coordinator.onFrame(cmd: cmd, time: time)
     }
 
-    /// Display-level beat pulse on the AI layer only (CLI --beat-glow equivalent).
-    private func displayGain() -> Float {
-        let beat: Float
+    /// Display-level beat pulse on the AI layer only: rhythm reads as hue.
+    private func beatForDisplay() -> Float {
         switch audioSource {
-        case .music: beat = music.features.w
-        case .mic: beat = analyzer.current.beat
-        case .none: beat = 0
+        case .music: return music.features.w
+        case .mic: return analyzer.current.beat
+        case .none: return 0
         }
-        return 1 + beatGlow * (audioSource == .music ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1) * beat
+    }
+
+    private func displayHue() -> Float {
+        let amp = beatHue * (audioSource == .music ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1)
+        return amp * beatForDisplay()
+    }
+
+    /// Legacy brightness pulse (beatGlow > 0 only).
+    private func displayGain() -> Float {
+        return 1 + beatGlow * (audioSource == .music ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1) * beatForDisplay()
     }
 
     // MARK: - Preview frame (30 Hz MTKView on the main screen)
@@ -303,38 +409,10 @@ final class StudioModel: ObservableObject {
 
     // MARK: - Prompt / lyric modulation (S1.2, CLI --lyric-prompt equivalent)
 
-    func applyPrompt() {
-        let p = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !p.isEmpty else { return }
-        prompt = p
-        recentPrompts.removeAll { $0 == p }
-        recentPrompts.insert(p, at: 0)
-        if recentPrompts.count > 10 { recentPrompts.removeLast() }
-        persistConfig()
-        client?.setPrompt(p)
-    }
-
-    /// Lyric line change -> hot prompt modulation, snapped to the next beat
-    /// boundary when one is near (identical logic to lkg-ai-demo main.swift).
-    private func lyricLineChanged(_ line: String) {
-        lyricLine = line
-        guard lyricPrompt else { return }
-        // 情感引擎已产出时用主题提示词做中段，否则退回手动 prompt（现状行为）
-        let base = themeEngine.currentTheme.isEmpty ? prompt : themeEngine.currentTheme
-        let composed = base + ", " + String(line.prefix(60))
-        let apply = { [weak self] in
-            self?.client?.setPrompt(composed)
-            print("[lyric-prompt] “\(line.prefix(60))”")
-        }
-        if let bc = music.beatClock {
-            let toNextBeat = (1 - (bc.phase - bc.phase.rounded(.down))) * bc.beatLen
-            if toNextBeat > 0.1, toNextBeat < 1.5 {
-                DispatchQueue.global().asyncAfter(deadline: .now() + toNextBeat) { apply() }
-                return
-            }
-        }
-        apply()
-    }
+    /// Prompting is engine-driven: TrackThemeEngine.onPrompt (top-5 theme
+    /// pool sampling + per-line emotion + lyric line + fixed quality tail)
+    /// pushes to the workers, beat-snapped and 2s throttled. `prompt` only
+    /// seeds the workers' initial style before the first engine compose.
 
     // MARK: - Audio source
 
@@ -382,7 +460,8 @@ final class StudioModel: ObservableObject {
             lyricLine = lyrics.currentLine
             emotionLabel = themeEngine.currentEmotionID.isEmpty ? ""
                 : themeEngine.currentEmotionID
-                  + (themeEngine.currentThemeEN.isEmpty ? "" : " · " + themeEngine.currentThemeEN)
+                  + (themeEngine.currentThemeZH.isEmpty ? "" : " · " + themeEngine.currentThemeZH)
+                  + (themeEngine.lineEmotionID.isEmpty ? "" : " → " + themeEngine.lineEmotionID)
         } else {
             nowPlaying = ""
             lyricLine = ""
@@ -395,7 +474,6 @@ final class StudioModel: ObservableObject {
     private func loadPersisted() {
         let d = defaults
         if let p = d.string(forKey: "studio.prompt"), !p.isEmpty { prompt = p }
-        if let r = d.stringArray(forKey: "studio.recentPrompts") { recentPrompts = r }
         if d.object(forKey: "studio.strength") != nil { strength = d.float(forKey: "studio.strength") }
         if d.object(forKey: "studio.renderSize") != nil { renderSize = d.integer(forKey: "studio.renderSize") }
         if d.object(forKey: "studio.workers") != nil { workers = max(1, d.integer(forKey: "studio.workers")) }
@@ -403,14 +481,15 @@ final class StudioModel: ObservableObject {
         if let a = d.string(forKey: "studio.audioSource"), let k = AudioSourceKind(rawValue: a) { audioSource = k }
         if d.object(forKey: "studio.lyricPrompt") != nil { lyricPrompt = d.bool(forKey: "studio.lyricPrompt") }
         if d.object(forKey: "studio.beatGlow") != nil { beatGlow = d.float(forKey: "studio.beatGlow") }
+        if d.object(forKey: "studio.beatHue") != nil { beatHue = d.float(forKey: "studio.beatHue") }
         if d.object(forKey: "studio.altMix") != nil { altMix = d.float(forKey: "studio.altMix") }
+        if d.object(forKey: "studio.lyricOverlay") != nil { lyricOverlay = d.bool(forKey: "studio.lyricOverlay") }
         loaded = true
     }
 
     private func persistConfig() {
         guard loaded else { return }
         defaults.set(prompt, forKey: "studio.prompt")
-        defaults.set(recentPrompts, forKey: "studio.recentPrompts")
         defaults.set(strength, forKey: "studio.strength")
         defaults.set(renderSize, forKey: "studio.renderSize")
         defaults.set(workers, forKey: "studio.workers")
@@ -418,6 +497,8 @@ final class StudioModel: ObservableObject {
         defaults.set(audioSource.rawValue, forKey: "studio.audioSource")
         defaults.set(lyricPrompt, forKey: "studio.lyricPrompt")
         defaults.set(beatGlow, forKey: "studio.beatGlow")
+        defaults.set(beatHue, forKey: "studio.beatHue")
         defaults.set(altMix, forKey: "studio.altMix")
+        defaults.set(lyricOverlay, forKey: "studio.lyricOverlay")
     }
 }

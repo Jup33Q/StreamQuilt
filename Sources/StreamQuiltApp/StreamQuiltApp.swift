@@ -1,18 +1,18 @@
 import AppKit
 import SwiftUI
 
-final class StudioAppDelegate: NSObject, NSApplicationDelegate {
-    weak var model: StudioModel?
+final class StreamQuiltAppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: StreamQuiltModel?
     func applicationWillTerminate(_ notification: Notification) { model?.shutdown() }
 }
 
 @main
-struct LKGStudioApp: App {
-    @NSApplicationDelegateAdaptor(StudioAppDelegate.self) private var appDelegate
-    @StateObject private var model = StudioModel()
+struct StreamQuiltApp: App {
+    @NSApplicationDelegateAdaptor(StreamQuiltAppDelegate.self) private var appDelegate
+    @StateObject private var model = StreamQuiltModel()
 
     var body: some Scene {
-        WindowGroup("LKG Studio") {
+        WindowGroup("StreamQuilt") {
             ContentView(model: model)
                 .onAppear {
                     appDelegate.model = model

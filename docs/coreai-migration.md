@@ -15,7 +15,7 @@
   `CoreAIRuntime`，`AIModel(contentsOf:) async` → `loadFunction(named:)` →
   `InferenceFunction.run(inputs:)` 全部可用且实测通过（见下文 smoke test）。
   **亮点**：`NDArray(unsafeBuffer: MTLBuffer, ...)` 支持 Metal buffer 零拷贝——
-  与 lkg-metal-quilt 的 Metal 管线天然契合，理论上可做到 raymarch → UNet → quilt 全程不下 GPU。
+  与 StreamQuilt 的 Metal 管线天然契合，理论上可做到 raymarch → UNet → quilt 全程不下 GPU。
 - **迁移工作量评估**：把 SDXS img2img 迁到 CoreAI 需要重转 UNet/TAESD（coreai-torch 支持
   torch.export + decomp 表；SD 的 GroupNorm/SiLU/attention 需要确认 decomp 覆盖度），
   文本编码器同理（或继续用 Python 预计算 embedding 的过渡方案）。估计 1–2 天工程量的

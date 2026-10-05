@@ -17,6 +17,9 @@ public final class LyricsService {
 
     private(set) var lines: [Line] = []
     private(set) var trackID = ""
+    /// Duration of the current track (seconds) as reported at fetch time;
+    /// used as the end of the last line's window.
+    public private(set) var trackDuration: Double = 0
     /// Current lyric line at the last-checked position ("" when none).
     public private(set) var currentLine = ""
     private var timer: Timer?
@@ -55,6 +58,7 @@ public final class LyricsService {
                     guard music.trackName + " — " + music.artist == id else { return }
                     self.trackID = id
                     self.lines = fetched
+                    self.trackDuration = dur
                     self.currentLine = ""
                     print("[lyrics] \(id): \(fetched.isEmpty ? "no lyrics" : "\(fetched.count) lines")")
                 }
@@ -81,6 +85,22 @@ public final class LyricsService {
         return result
     }
 
+    /// Current line with its time window: start = line timestamp, end = next
+    /// line's timestamp (or track duration for the last line). Same 0.2s
+    /// lookahead as `lineAt`. nil when no lyrics or before the first line.
+    /// In-line progress = (position - start) / (end - start).
+    public func currentLineWindow(at position: Double) -> (text: String, start: Double, end: Double)? {
+        guard !lines.isEmpty else { return nil }
+        var idx: Int?
+        for (i, l) in lines.enumerated() {
+            if l.t <= position + 0.2 { idx = i } else { break }
+        }
+        guard let i = idx else { return nil }
+        let next = i + 1 < lines.count ? lines[i + 1].t : trackDuration
+        let end = next > lines[i].t ? next : lines[i].t + 4
+        return (lines[i].text, lines[i].t, end)
+    }
+
     // MARK: - Fetching
 
     private static func fetchTrack(name: String, artist: String, duration: Double) -> [Line] {
@@ -105,7 +125,7 @@ public final class LyricsService {
         ]
         guard let url = comp.url else { return [] }
         var req = URLRequest(url: url, timeoutInterval: 10)
-        req.setValue("lkg-metal-quilt lyric-prompt", forHTTPHeaderField: "User-Agent")
+        req.setValue("StreamQuilt lyric-prompt", forHTTPHeaderField: "User-Agent")
         // blocking call — always invoked on a background queue from tick()
         let sem = DispatchSemaphore(value: 0)
         var result: Data?

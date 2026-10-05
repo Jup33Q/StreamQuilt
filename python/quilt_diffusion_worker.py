@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Quilt diffusion worker — per-view StreamDiffusion img2img backend for lkg-ai-demo.
+Quilt diffusion worker — per-view StreamDiffusion img2img backend for sq-ai-demo.
 
 Reads per-view RGB frames from stdin, stylizes them with the CoreML img2img
 pipeline (streamdiffusion-mac), and writes raw RGB results to stdout.

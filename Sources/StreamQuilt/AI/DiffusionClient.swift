@@ -181,7 +181,13 @@ public final class DiffusionClient {
             w.busy = false
 
             resultLock.lock()
-            pendingResults.append(Result(view: Int(view), width: Int(wd), height: Int(ht), rgba: rgba))
+            // pendingResults is only the mailbox for offline processSync /
+            // drainResults. Live mode consumes via onResult and never drains —
+            // buffering unconditionally leaks one full RGBA payload per tile
+            // (~0.6-1.3 MB × tiles/s × hours, tens of GB swapped out).
+            if onResult == nil {
+                pendingResults.append(Result(view: Int(view), width: Int(wd), height: Int(ht), rgba: rgba))
+            }
             resultCount += 1
             let elapsed = Date().timeIntervalSince(resultWindowStart)
             if elapsed >= 2 {

@@ -16,7 +16,9 @@ enum LKGFixedShaders {
         float overlayShift;  // full-sweep shift as fraction of screen width
         float hasOverlay;
         float altMix;        // lerp toward alt quilt (texture 2), per subpixel
-        float mainGain;      // per-frame gain on the main quilt (beat pulse)
+        float mainGain;      // per-frame gain on the main quilt (legacy beat pulse)
+        float mainHue;       // per-frame hue rotation on the main quilt (turns)
+        float maxOut;        // hard cap on final subpixel intensity
     };
 
     struct LKGTestPatternParams {
@@ -51,6 +53,14 @@ enum LKGFixedShaders {
         return v * mix(float3(1.0), clamp(p - 1.0, 0.0, 1.0), s);
     }
 
+    /// Rotate hue around the gray axis; h in turns (wraps at 1).
+    static float3 lkgHueRotate(float3 c, float h) {
+        float a = h * 6.2831853;
+        float ca = cos(a), sa = sin(a);
+        float3 k = float3(0.5773503);
+        return c * ca + cross(k, c) * sa + k * dot(k, c) * (1.0 - ca);
+    }
+
     /// Tonemapped blit of the HDR quilt texture (preview window / PNG export).
     fragment float4 lkgTonemapFS(float4 fpos [[position]], texture2d<float> tex [[texture(0)]],
                                  constant float2& destSize [[buffer(0)]]) {
@@ -81,7 +91,7 @@ enum LKGFixedShaders {
             float ty = floor(view / LP.tilesX);
             float2 q = float2((tx + uv.x) / LP.tilesX, (ty + uv.y) / LP.tilesY);
             q.y = 1.0 - q.y; // Metal texture v flip
-            float3 qc = quilt.sample(s, q).rgb * LP.mainGain;
+            float3 qc = lkgHueRotate(quilt.sample(s, q).rgb, LP.mainHue) * LP.mainGain;
             // alt-quilt blend: same q -> per-subpixel, per-view aligned lerp
             // (e.g. smooth fade between AI-stylized and raw raymarch layers).
             if (LP.altMix > 0.0) {
@@ -97,7 +107,7 @@ enum LKGFixedShaders {
                 outCol[i] = mix(outCol[i], ov[i], ov.a);
             }
         }
-        return float4(outCol, 1.0);
+        return float4(min(outCol, float3(LP.maxOut)), 1.0);
     }
 
     /// Calibration test pattern: each view gets a flat hue.

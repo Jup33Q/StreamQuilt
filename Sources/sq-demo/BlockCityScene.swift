@@ -1,4 +1,4 @@
-import LKGQuilt
+import StreamQuilt
 import Metal
 import simd
 

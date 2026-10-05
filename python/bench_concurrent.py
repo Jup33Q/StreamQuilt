@@ -16,7 +16,7 @@ import time
 import numpy as np
 
 PY = os.path.expanduser("~/Documents/kimi/workspace/streamdiffusion-mac/.venv/bin/python")
-SCRIPT = os.path.expanduser("~/Desktop/lkg-metal-quilt/python/quilt_diffusion_worker.py")
+SCRIPT = os.path.expanduser("~/Desktop/StreamQuilt/python/quilt_diffusion_worker.py")
 
 
 def read_exact(f, n):

@@ -1,12 +1,12 @@
-// lkg-demo: real-time shadertoy-style quilt rendering on Looking Glass (Metal).
+// sq-demo: real-time shadertoy-style quilt rendering on Looking Glass (Metal).
 //
-//   swift run -c release lkg-demo                     live on LKG + preview window
-//   swift run -c release lkg-demo -- --dump q.png     save one quilt frame and exit
-//   swift run -c release lkg-demo -- --dump-lentic l.png  save interlaced panel image
+//   swift run -c release sq-demo                     live on LKG + preview window
+//   swift run -c release sq-demo -- --dump q.png     save one quilt frame and exit
+//   swift run -c release sq-demo -- --dump-lentic l.png  save interlaced panel image
 //   flags: --time 1.2  --half  --no-preview
 
 import Foundation
-import LKGQuilt
+import StreamQuilt
 
 setvbuf(stdout, nil, _IONBF, 0)
 

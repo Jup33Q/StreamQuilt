@@ -25,6 +25,13 @@ public struct LenticularUniforms {
     /// 1 = neutral; AI demo drives it from the beat clock so the AI layer
     /// pulses with the music (alt/raw layer stays steady).
     public var mainGain: Float = 1
+    /// Per-frame hue rotation (in turns, wraps at 1) applied to the MAIN quilt
+    /// sample only (before alt mix). 0 = neutral; AI demo drives it from the
+    /// beat clock so rhythm reads as hue pulse, not brightness pulse.
+    public var mainHue: Float = 0
+    /// Hard cap on the final interlaced subpixel intensity (post-tonemap,
+    /// post-overlay). Keeps the panel from overdriving bright pixels.
+    public var maxOut: Float = 0.7
 
     public init() {}
 }
@@ -109,7 +116,7 @@ public struct Calibration: Sendable {
         func val(_ d: [String: Any]?, _ key: String) -> Any? {
             (d?[key] as? [String: Any])?["value"]
         }
-        guard let orch = put("enter_orchestration", ["name": "lkg-metal-quilt"]),
+        guard let orch = put("enter_orchestration", ["name": "StreamQuilt"]),
               let token = val(orch, "payload") as? String,
               let devs = put("available_output_devices", ["orchestration": token]),
               let payload = devs["payload"] as? [String: Any],
