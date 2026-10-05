@@ -16,7 +16,8 @@
   - `multilingual`（CPU+GPU，1024-token **track 车道**）
   - `multilingual-ane`（ANE，96-token **line 车道**）
 - 应用侧（`Sources/StreamQuilt/AI/EmotionEngine.swift` TrackThemeEngine）：
-  - track 车道 4 问：theme(18)/emotion(14)/fontset(9)/subject(34)；
+  - track 车道 4+1 问：theme(18)/emotion(14)/fontset(9)/subject_cat(5) → 类内卡(≤10)；
+    **CoreML 导出每题 ≤32 选项**（卡池 34 触发超限后改两段式仲裁，S7.1 已落地）；
   - line 车道 2 问：pool pick(≤5)/emotion(14)——**96 token 放不下更多 criteria，
     任何新决策维度只能进 track 车道**；
   - top-5 主题池 EMA(0.55/0.45) 逐行重排；行情感 +0.15 滞回；hash 兜底
@@ -110,7 +111,8 @@ ANE 时延不变、hash 兜底不变）。
 2. ~/Desktop/StreamQuilt/Sources/StreamQuilt/AI/EmotionEngine.swift ← TrackThemeEngine
    （track 车道 4 问 / line 车道 2 问 / top-5 池 EMA / 滞回 / hash 兜底）
 3. ~/Desktop/StreamQuilt/Sources/StreamQuilt/AI/ThemeLibrary.swift ← Theme.all=18 +
-   SubjectPool=34（夹具的答案空间）
+   SubjectPool=34（夹具的答案空间；在线仲裁为 category→类内卡 两段式，
+   夹具评估时单题 criteria 须 ≤32，可同样两段或直接 PyTorch torch_model.py 评估全量）
 4. ~/.kimi-code/skills/streamquilt/SKILL.md（laya 概率位置、modulo 越界坑、ANE 车道预算）
 
 关键上下文：
@@ -124,6 +126,8 @@ ANE 时延不变、hash 兜底不变）。
   双模型独立裁决同题面；jury-agree 直接收录、jury-split 进人工复核（规则见 plan
   「教师混合裁判」节）；本机还有 gpt-oss:120b/gemma4:31b 作重量级备选仲裁。
   Music 资料库 555 首。
+- MusicBridge 已供 album/genre（题面带 "(album: X, genre: Y)"）；夹具构建拉库时
+  同样带 album/genre（`album/genre of tracks of library playlist`）。
 - R0 三件事：TrackThemeEngine 决策 JSONL 落盘（logs/decisions.jsonl，gitignore）；
   从 Music 库分层抽 ~120 首做 python/laya_judge_fixture.jsonl（混合裁判初标+人工复核）；
   python/laya_judge_eval.py 跑 app 同构问题集出 top-1/top-3/ECE 基线。
