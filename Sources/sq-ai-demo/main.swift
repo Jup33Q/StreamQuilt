@@ -17,9 +17,10 @@ import Metal
 
 setvbuf(stdout, nil, _IONBF, 0)
 
-// signal handlers can't capture context — keep a global for cleanup.
+// signal handlers can't capture context — keep globals for cleanup.
 private var gDiffusionClient: DiffusionClient?
 private var gLayaClient: LayaClient?
+private var gSystemAudio: SystemAudioAnalyzer?
 
 struct CLI {
     // N2: palette-locked prompt matching the synthwave scene (anti-flicker:
@@ -60,7 +61,7 @@ struct CLI {
     var ollamaModel = "gemma4:e4b-mlx"
     var grid = "7x8"   // AI 路径默认 7x8=56（低算力布局）；11x6 为全规格 66
     var units = ""     // 逗号分隔，如 "all,cpu_and_gpu"；空 = 异构默认
-    var audioSource = "music"   // music（Apple Music 节拍钟，默认）| mic | none
+    var audioSource = "music"   // music（Apple Music 节拍钟，默认）| mic（环境声 FFT）| system（SCK 播放输出捕获+音高）| none
     var python = NSString(string: "~/Documents/kimi/workspace/streamdiffusion-mac/.venv/bin/python").expandingTildeInPath
     var script = ""
     var models = ""
@@ -310,13 +311,18 @@ do {
     coordinator.orderMode = cli.order == "center" ? .center : .wave
     coordinator.baseAltMix = cli.altMix
 
-    // audio-reactive: Apple Music beat clock (default) or mic FFT (--audio-source mic)
+    // audio-reactive: Apple Music beat clock (default), mic FFT, or real
+    // playback-output capture (--audio-source music|mic|system).
+    // Metadata (Now Playing/BPM/beat-epoch/lyrics/emotion hooks) is decoupled
+    // from the audio FEATURE source: it runs in both music and system modes —
+    // only scene.audioProvider/pitchProvider differ.
     let music = MusicBridge()
     let analyzer = AudioAnalyzer()
+    let sysAudio = SystemAudioAnalyzer()
     let lyrics = LyricsService()
     let themeEngine = TrackThemeEngine()
-    if cli.audioSource == "music" {
-        scene.audioProvider = { music.features }
+    let metadataActive = (cli.audioSource == "music" || cli.audioSource == "system")
+    if metadataActive {
         music.start()
         // N4: epoch boundaries aligned to every 2nd beat
         if cli.beatEpoch {
@@ -366,12 +372,32 @@ do {
             }
             apply()
         }
-    } else if cli.audioSource == "mic" {
+    }
+    switch cli.audioSource {
+    case "music":
+        scene.audioProvider = { music.features }
+    case "mic":
         scene.audioProvider = {
             let f = analyzer.current
             return SIMD4(f.bass, f.mid, f.treble, f.beat)
         }
+        scene.pitchProvider = { analyzer.current.pitchTurns }
         analyzer.start()
+    case "system":
+        scene.audioProvider = {
+            let f = sysAudio.current
+            return SIMD4(f.bass, f.mid, f.treble, f.beat)
+        }
+        scene.pitchProvider = { sysAudio.current.pitchTurns }
+        sysAudio.start()
+        // 2s diagnostic: real features + pitch track visible in stdout
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            let f = sysAudio.current
+            print(String(format: "[audio] sys b%.2f m%.2f t%.2f bt%.2f | pitch %.0fHz conf %.2f turns %.3f",
+                         f.bass, f.mid, f.treble, f.beat,
+                         f.pitchHz, f.pitchConfidence, f.pitchTurns))
+        }
+    default: break
     }
 
     // L2 parallax lyric overlay: the device interlace samples this screen-space
@@ -392,7 +418,7 @@ do {
         }
     }
     app.overlayProvider = { lyricOverlayEnabled ? lyricOverlay.texture : nil }
-    if cli.audioSource == "music" {
+    if metadataActive {
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
             guard lyricOverlayEnabled else { return }
             var title = "", subtitle = ""
@@ -429,12 +455,13 @@ do {
         switch cli.audioSource {
         case "music": return music.features.w
         case "mic": return analyzer.current.beat
+        case "system": return sysAudio.current.beat
         default: return 0
         }
     }
     app.mainHueProvider = {
         // 情感引擎 energy（含 chorus 短期 +0.3）缩放节拍脉冲；引擎关闭保持原样
-        let amp: Float = (cli.emotionEngine && cli.audioSource == "music")
+        let amp: Float = (cli.emotionEngine && metadataActive)
             ? cli.beatHue * (0.7 + 0.6 * themeEngine.effectiveEnergy)
             : cli.beatHue
         return amp * beatForDisplay()
@@ -451,7 +478,7 @@ do {
             return true
         }
         if scene.handleKey(key) { return true }
-        guard cli.audioSource == "music" else { return false }
+        guard metadataActive else { return false }
         switch key {
         case " ": music.togglePlayPause(); return true
         case "n": music.nextTrack(); return true
@@ -485,16 +512,27 @@ do {
             }
         case "mic":
             let f = analyzer.current
-            s += String(format: " | ♫ b%.2f m%.2f t%.2f bt%.2f", f.bass, f.mid, f.treble, f.beat)
+            s += String(format: " | ♫ b%.2f m%.2f t%.2f bt%.2f p%.0fHz",
+                        f.bass, f.mid, f.treble, f.beat, f.pitchHz)
+        case "system":
+            let f = sysAudio.current
+            s += String(format: " | ♫ b%.2f m%.2f t%.2f bt%.2f p%.0fHz",
+                        f.bass, f.mid, f.treble, f.beat, f.pitchHz)
+            if !music.line.isEmpty {
+                s += " | ♪ " + music.line + (music.bpm > 0 ? " \(music.bpm)bpm" : "")
+            } else {
+                s += " | ♪ (Music not playing)"
+            }
         default: break
         }
         return s
     }
     // clean up workers no matter how we exit (TaskStop/SIGINT orphan them otherwise)
     gDiffusionClient = client
-    signal(SIGTERM) { _ in gDiffusionClient?.stopAll(); gLayaClient?.stop(); exit(0) }
-    signal(SIGINT) { _ in gDiffusionClient?.stopAll(); gLayaClient?.stop(); exit(0) }
-    app.onWillTerminate = { client.stopAll(); gLayaClient?.stop() }
+    gSystemAudio = sysAudio
+    signal(SIGTERM) { _ in gDiffusionClient?.stopAll(); gLayaClient?.stop(); gSystemAudio?.stop(); exit(0) }
+    signal(SIGINT) { _ in gDiffusionClient?.stopAll(); gLayaClient?.stop(); gSystemAudio?.stop(); exit(0) }
+    app.onWillTerminate = { client.stopAll(); gLayaClient?.stop(); sysAudio.stop() }
     client.start()
     coordinator.start()
 

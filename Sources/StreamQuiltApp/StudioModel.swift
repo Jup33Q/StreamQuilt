@@ -11,12 +11,13 @@ import StreamQuilt
 private var gStreamQuiltModel: StreamQuiltModel?
 
 enum AudioSourceKind: String, CaseIterable, Identifiable {
-    case music, mic, none
+    case music, mic, system, none
     var id: String { rawValue }
     var label: String {
         switch self {
         case .music: return "Music"
         case .mic: return "Mic"
+        case .system: return "System"
         case .none: return "Off"
         }
     }
@@ -91,12 +92,14 @@ final class StreamQuiltModel: ObservableObject {
 
     private let music = MusicBridge()
     private let analyzer = AudioAnalyzer()
+    private let sysAudio = SystemAudioAnalyzer()
     private let lyrics = LyricsService()
     /// 情感引擎（laya 本地决策模型：整曲主题 top-5 权重池 + 逐行情感滞后切换）。
     private let themeEngine = TrackThemeEngine()
     private var layaClient: LayaClient?
     private var musicActive = false
     private var micActive = false
+    private var sysActive = false
 
     private var startTime = CACurrentMediaTime()
     private var started = false
@@ -210,6 +213,7 @@ final class StreamQuiltModel: ObservableObject {
         layaClient?.stop()
         music.stop()
         analyzer.stop()
+        sysAudio.stop()
         client?.stopAll()
     }
 
@@ -293,7 +297,8 @@ final class StreamQuiltModel: ObservableObject {
         }
         dw.mainHueProvider = { [weak self] in self?.displayHue() ?? 0 }
         dw.overlayProvider = { [weak self] in
-            guard let self, self.lyricOverlay, self.audioSource == .music, self.playing
+            guard let self, self.lyricOverlay,
+                  self.audioSource == .music || self.audioSource == .system, self.playing
             else { return nil }
             return self.overlayRenderer?.texture
         }
@@ -310,7 +315,7 @@ final class StreamQuiltModel: ObservableObject {
     private func feedOverlay() {
         var title = ""
         var subtitle = ""
-        if audioSource == .music && playing {
+        if (audioSource == .music || audioSource == .system) && playing {
             let pos = music.position
             if let win = lyrics.currentLineWindow(at: pos) {
                 title = win.text
@@ -348,18 +353,21 @@ final class StreamQuiltModel: ObservableObject {
         switch audioSource {
         case .music: return music.features.w
         case .mic: return analyzer.current.beat
+        case .system: return sysAudio.current.beat
         case .none: return 0
         }
     }
 
     private func displayHue() -> Float {
-        let amp = beatHue * (audioSource == .music ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1)
+        let amp = beatHue * (audioSource == .music || audioSource == .system
+                             ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1)
         return amp * beatForDisplay()
     }
 
     /// Legacy brightness pulse (beatGlow > 0 only).
     private func displayGain() -> Float {
-        return 1 + beatGlow * (audioSource == .music ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1) * beatForDisplay()
+        return 1 + beatGlow * (audioSource == .music || audioSource == .system
+                               ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1) * beatForDisplay()
     }
 
     // MARK: - Preview frame (30 Hz MTKView on the main screen)
@@ -421,21 +429,40 @@ final class StreamQuiltModel: ObservableObject {
         case .music:
             if !musicActive { music.start(); musicActive = true }
             if micActive { analyzer.stop(); micActive = false }
+            if sysActive { sysAudio.stop(); sysActive = false }
             scene?.audioProvider = { [weak self] in self?.music.features ?? .zero }
+            scene?.pitchProvider = nil
             coordinator?.beatClockProvider = { [weak self] in self?.music.beatClock }
         case .mic:
             if musicActive { music.stop(); musicActive = false }
+            if sysActive { sysAudio.stop(); sysActive = false }
             if !micActive { analyzer.start(); micActive = true }
             scene?.audioProvider = { [weak self] in
                 guard let self else { return .zero }
                 let f = self.analyzer.current
                 return SIMD4(f.bass, f.mid, f.treble, f.beat)
             }
+            scene?.pitchProvider = { [weak self] in self?.analyzer.current.pitchTurns ?? 0 }
             coordinator?.beatClockProvider = nil
+        case .system:
+            // metadata (beat clock/lyrics/emotion) stays on Music.app; only the
+            // audio FEATURES come from the real playback-output capture
+            if !musicActive { music.start(); musicActive = true }
+            if micActive { analyzer.stop(); micActive = false }
+            if !sysActive { sysAudio.start(); sysActive = true }
+            scene?.audioProvider = { [weak self] in
+                guard let self else { return .zero }
+                let f = self.sysAudio.current
+                return SIMD4(f.bass, f.mid, f.treble, f.beat)
+            }
+            scene?.pitchProvider = { [weak self] in self?.sysAudio.current.pitchTurns ?? 0 }
+            coordinator?.beatClockProvider = { [weak self] in self?.music.beatClock }
         case .none:
             if musicActive { music.stop(); musicActive = false }
             if micActive { analyzer.stop(); micActive = false }
+            if sysActive { sysAudio.stop(); sysActive = false }
             scene?.audioProvider = nil
+            scene?.pitchProvider = nil
             coordinator?.beatClockProvider = nil
         }
     }
@@ -453,7 +480,7 @@ final class StreamQuiltModel: ObservableObject {
         tileHz = tilesPerSec / Double(max(viewCount, 1))
         workersReady = client?.readyWorkerCount ?? 0
         deviceAvailable = LKGDeviceWindowController.deviceScreen != nil
-        if audioSource == .music {
+        if audioSource == .music || audioSource == .system {
             nowPlaying = music.line
             playing = music.playing
             bpm = music.bpm

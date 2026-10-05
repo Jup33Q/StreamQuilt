@@ -31,7 +31,9 @@ import Foundation
 /// Sun drifts around (0, 6, -24) ±(2.6, 0.8, -), never leaves the frame.
 /// Columns live in the z ∈ [-18, 8] band around the focus plane.
 /// Emotion engine: `theme` uniform = (hueBias, crystalGain, columnGain,
-/// emberGain); default (0,1,1,1) is bitwise-neutral.
+/// emberGain); default (0,1,1,1) is bitwise-neutral. `audioPitch` uniform =
+/// detected pitch in hue turns (MIDI/12, confidence-gated + smoothed, holds
+/// last value under noise); default 0 is bitwise-neutral.
 extension AIBlockCityScene {
     static let sceneMSL = """
     struct AIBaseParams {
@@ -39,12 +41,14 @@ extension AIBlockCityScene {
         float4 audio;   // bass, mid, treble, beat
         float cols, rows, time, size, flip, dist, camH, fovTan, pitch, aspect;
         float4 theme;   // emotion engine: hueBias, crystalGain, columnGain, emberGain
+        float audioPitch;   // tail-appended: detected pitch in hue turns (MIDI/12)
     };
 
     struct AIViewParams {
         float4 audio;
         float time, viewT, size, flip, dist, camH, fovTan, pitch, renderSize;
         float4 theme;
+        float audioPitch;   // tail-appended: detected pitch in hue turns (MIDI/12)
     };
 
     vertex float4 aiSceneVS(uint vid [[vertex_id]]) {
@@ -294,19 +298,21 @@ extension AIBlockCityScene {
         return pow(c, float3(1.0 / 2.2));
     }
 
-    static float3 shadeScene(float3 ro, float3 dir, float2 ndc, float time, float4 audio, float4 theme) {
+    static float3 shadeScene(float3 ro, float3 dir, float2 ndc, float time, float4 audio, float4 theme, float audioPitch) {
         // CLASH palette: complementary hue pairs orbit the wheel together with
         // the music (mid/treble = big swing, beat = fast kick), per-element
         // multipliers make layers land on different hues for extra clash
         float hueShift = audio.y * 0.33 + audio.z * 0.18 + audio.w * 0.45
                        + sin(time * 0.07) * 0.06;
         hueShift += theme.x;                            // emotion: hue re-anchor
+        hueShift += audioPitch;                         // pitch class anchors hue (adds with theme.x)
         float satPop = min(1.0 + audio.w * 0.3, 1.0);       // beat saturation snap
         float melt = meltFactor(audio);
 
-        // mid -> gentle camera sway, beat -> small bob
-        ro.x += sin(time * 0.5) * 0.5 * audio.y;
-        ro.y += audio.w * 0.15;
+        // groove: camera rides kick (bass) and backbeat (mid) — motion, not
+        // brightness; beat adds a small bob
+        ro.x += sin(time * 0.5) * (0.4 * audio.y + 0.25 * audio.x);
+        ro.y += audio.w * 0.15 + audio.x * 0.12;
         // autonomous drift: the scene keeps breathing even in silence
         ro.x += sin(time * 0.13) * 0.8;
         ro.y += sin(time * 0.09) * 0.15;
@@ -483,7 +489,7 @@ extension AIBlockCityScene {
         float off = lkgViewOffset(ti.viewT, P.size, P.flip);
         float3 ro = float3(off, P.camH, P.dist);
         float3 dir = lkgViewRay(ti, off, P.dist, P.fovTan, P.aspect, P.pitch);
-        return float4(shadeScene(ro, dir, ti.tileNDC, P.time, P.audio, P.theme), 1.0);
+        return float4(shadeScene(ro, dir, ti.tileNDC, P.time, P.audio, P.theme, P.audioPitch), 1.0);
     }
 
     // Single-view LDR render (square staging) as diffusion img2img input.
@@ -495,7 +501,7 @@ extension AIBlockCityScene {
         float3 dir = normalize(float3(ndc.x * P.fovTan, ndc.y * P.fovTan, -1.0));
         float cp = cos(P.pitch), sp = sin(P.pitch);
         dir = float3(dir.x, dir.y * cp + dir.z * sp, -dir.y * sp + dir.z * cp);
-        return float4(aces(shadeScene(ro, dir, ndc, P.time, P.audio, P.theme)), 1.0);
+        return float4(aces(shadeScene(ro, dir, ndc, P.time, P.audio, P.theme, P.audioPitch)), 1.0);
     }
     """
 }

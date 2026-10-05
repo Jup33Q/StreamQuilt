@@ -16,6 +16,8 @@
     <string>14.0</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>StreamQuilt AI Demo listens to ambient audio (e.g. music playing aloud) to drive audio-reactive holographic visuals. Audio is analyzed locally in real time and never recorded or sent anywhere.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>StreamQuilt AI Demo captures app audio output (e.g. Music.app playback) via ScreenCaptureKit to drive audio-reactive holographic visuals. Audio is analyzed locally in real time and never recorded or sent anywhere.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>StreamQuilt AI Demo reads the Now Playing track (title/artist/BPM) from Music.app to sync audio-reactive visuals.</string>
 </dict>

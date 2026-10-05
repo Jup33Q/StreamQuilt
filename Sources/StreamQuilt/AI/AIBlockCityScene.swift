@@ -36,6 +36,7 @@ public final class AIBlockCityScene {
         var size: Float; var flip: Float; var dist: Float; var camH: Float
         var fovTan: Float; var pitch: Float; var aspect: Float
         var theme: SIMD4<Float>
+        var audioPitch: Float   // tail-appended: detected pitch in hue turns (MIDI/12)
     }
 
     struct ViewParams {
@@ -44,10 +45,14 @@ public final class AIBlockCityScene {
         var dist: Float; var camH: Float; var fovTan: Float; var pitch: Float
         var renderSize: Float
         var theme: SIMD4<Float>
+        var audioPitch: Float   // tail-appended: detected pitch in hue turns (MIDI/12)
     }
 
     /// Supplies (bass, mid, treble, beat) each encode; nil = silence.
     public var audioProvider: (() -> SIMD4<Float>)?
+    /// Supplies the detected pitch in hue turns (MIDI/12) each encode;
+    /// nil = 0 (bitwise-neutral — offline dumps stay identical).
+    public var pitchProvider: (() -> Float)?
 
     public init(renderer: QuiltRenderer, viewSize: Int = 512, stagingCount: Int = 8) throws {
         self.renderer = renderer
@@ -94,7 +99,7 @@ public final class AIBlockCityScene {
             cols: Float(spec.columns), rows: Float(spec.rows), time: t,
             size: sweep, flip: flip, dist: dist, camH: camH,
             fovTan: tan(fovY / 2), pitch: pitch, aspect: spec.tileAspect,
-            theme: themeBias)
+            theme: themeBias, audioPitch: pitchProvider?() ?? 0)
         enc.setFragmentBytes(&p, length: MemoryLayout<BaseParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -114,7 +119,7 @@ public final class AIBlockCityScene {
             viewT: Float(viewIndex) / Float(renderer.spec.viewCount - 1),
             size: sweep, flip: flip, dist: dist, camH: camH,
             fovTan: tan(fovY / 2), pitch: pitch, renderSize: Float(viewSize),
-            theme: themeBias)
+            theme: themeBias, audioPitch: pitchProvider?() ?? 0)
         enc.setFragmentBytes(&p, length: MemoryLayout<ViewParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()

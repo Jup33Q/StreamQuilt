@@ -38,17 +38,33 @@ public final class MusicBridge {
 
     /// Synthetic beat-synchronized features: (bass, mid, treble, beat).
     /// When BPM is unknown, falls back to a 100 BPM metronome while playing.
+    /// v2 groove engine: distinct musical roles per band instead of three
+    /// near-identical decaying pulses — an 8th-note walking kick (bass), a
+    /// backbeat snare on beats 2/4 (mid), 16th-note hi-hat with alternating
+    /// velocity that actually crosses zero (treble), all under an 8-beat
+    /// phrase envelope so the whole scene breathes in builds and releases.
     public var features: SIMD4<Float> {
         guard playing else { return .zero }
         let b = Double(bpm > 0 ? bpm : 100)
         let beatLen = 60.0 / b
         let phase = position / beatLen
-        let frac = phase - phase.rounded(.down)          // 0..1 inside beat
-        let beatPulse = Float(exp(-6.0 * frac))           // decaying onset pulse
-        let offPhase = (phase + 0.5).truncatingRemainder(dividingBy: 1)
-        let offPulse = Float(exp(-8.0 * offPhase))        // offbeat (mid)
-        let shimmer = Float(0.5 + 0.5 * sin(phase * .pi * 4)) // 2x per beat (treble)
-        return SIMD4(beatPulse, offPulse, shimmer, beatPulse)
+        let frac = Float(phase - phase.rounded(.down))       // 0..1 inside beat
+        // kick: downbeat thump + softer 8th-note ghost -> low end walks
+        let kick = exp(-6.0 * frac)
+        let halfFrac = Float((phase * 2).truncatingRemainder(dividingBy: 1))
+        let bass = min(kick + 0.45 * exp(-7.0 * halfFrac), 1)
+        // snare/clap: backbeat on beats 2 & 4, light tap elsewhere
+        let beatInBar = Int(phase.rounded(.down)) % 4
+        let snareGate: Float = (beatInBar == 1 || beatInBar == 3) ? 1 : 0.25
+        let mid = snareGate * exp(-7.0 * frac)
+        // hi-hat: 16ths, alternating velocity, true zeros between hits
+        let frac16 = Float((phase * 4).truncatingRemainder(dividingBy: 1))
+        let step16 = Int((phase * 4).rounded(.down)) % 4
+        let treble = (step16 % 2 == 0 ? 0.85 : 0.5) * exp(-9.0 * frac16)
+        // 8-beat phrase envelope: slow build/release so motion never flatlines
+        let phrase = Float(0.8 + 0.2 * sin(phase * .pi / 4))
+        let beat = Float(exp(-6.0 * Double(frac)))
+        return SIMD4(bass * phrase, mid * phrase, treble, beat)
     }
 
     public func start(pollInterval: TimeInterval = 2) {
