@@ -199,10 +199,17 @@ final class StreamQuiltModel: ObservableObject {
         // nil or AppKit plays the "invalid input" beep; never steal keys from
         // a text field (the prompt editor) — the field editor is an NSTextView.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { [weak self] ev in
-            guard let self, ev.keyCode == 5, !ev.modifierFlags.contains(.command) else { return ev }
+            guard let self, !ev.modifierFlags.contains(.command) else { return ev }
             if let fr = NSApp.keyWindow?.firstResponder, fr is NSTextView { return ev }
-            self.coordinator?.rawPeek = (ev.type == .keyDown)
-            return nil
+            if ev.keyCode == 5 {   // G: raw-layer peek
+                self.coordinator?.rawPeek = (ev.type == .keyDown)
+                return nil
+            }
+            if ev.type == .keyDown {   // ,/. : lyric timing nudge (persisted per track)
+                if ev.keyCode == 43 { self.lyrics.nudge(-0.5); return nil }
+                if ev.keyCode == 47 { self.lyrics.nudge(+0.5); return nil }
+            }
+            return ev
         }
     }
 

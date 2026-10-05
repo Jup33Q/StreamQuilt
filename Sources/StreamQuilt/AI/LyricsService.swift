@@ -22,6 +22,10 @@ public final class LyricsService {
     public private(set) var trackDuration: Double = 0
     /// Current lyric line at the last-checked position ("" when none).
     public private(set) var currentLine = ""
+    /// Per-track timing offset (seconds, persisted): added to the playback
+    /// position before line lookup. Corrects LRCLIB release/master mismatch
+    /// (constant intro offset), which dominates lyric desync in practice.
+    public private(set) var offset: Double = 0
     private var timer: Timer?
     private var fetching = false
     /// Prompt-modulation throttle (plan L3: >= 2s between lyric-driven switches).
@@ -60,7 +64,10 @@ public final class LyricsService {
                     self.lines = fetched
                     self.trackDuration = dur
                     self.currentLine = ""
-                    print("[lyrics] \(id): \(fetched.isEmpty ? "no lyrics" : "\(fetched.count) lines")")
+                    self.offset = UserDefaults.standard.object(forKey: Self.offsetKey(id)) != nil
+                        ? UserDefaults.standard.double(forKey: Self.offsetKey(id)) : 0
+                    print("[lyrics] \(id): \(fetched.isEmpty ? "no lyrics" : "\(fetched.count) lines")"
+                        + (self.offset != 0 ? String(format: " offset %+.1fs", self.offset) : ""))
                 }
             }
             return
@@ -76,11 +83,11 @@ public final class LyricsService {
         }
     }
 
-    /// Last line whose timestamp <= position + 0.2s lookahead.
+    /// Last line whose timestamp <= position + offset + 0.2s lookahead.
     public func lineAt(_ position: Double) -> String {
         var result = ""
         for l in lines {
-            if l.t <= position + 0.2 { result = l.text } else { break }
+            if l.t <= position + offset + 0.2 { result = l.text } else { break }
         }
         return result
     }
@@ -91,6 +98,7 @@ public final class LyricsService {
     /// In-line progress = (position - start) / (end - start).
     public func currentLineWindow(at position: Double) -> (text: String, start: Double, end: Double)? {
         guard !lines.isEmpty else { return nil }
+        let position = position + offset
         var idx: Int?
         for (i, l) in lines.enumerated() {
             if l.t <= position + 0.2 { idx = i } else { break }
@@ -100,6 +108,16 @@ public final class LyricsService {
         let end = next > lines[i].t ? next : lines[i].t + 4
         return (lines[i].text, lines[i].t, end)
     }
+
+    /// Nudge lyric timing (persisted per track). Positive = lyrics later.
+    public func nudge(_ delta: Double) {
+        guard !trackID.isEmpty else { return }
+        offset += delta
+        UserDefaults.standard.set(offset, forKey: Self.offsetKey(trackID))
+        print(String(format: "[lyrics] offset %+.1fs", offset))
+    }
+
+    private static func offsetKey(_ id: String) -> String { "lyrics.offset." + id }
 
     // MARK: - Fetching
 

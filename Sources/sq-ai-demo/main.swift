@@ -521,6 +521,8 @@ do {
             print("lyric overlay = \(lyricOverlayEnabled)")
             return true
         }
+        if key == "," { lyrics.nudge(-0.5); return true }
+        if key == "." { lyrics.nudge(+0.5); return true }
         if scene.handleKey(key) { return true }
         guard metadataActive else { return false }
         switch key {

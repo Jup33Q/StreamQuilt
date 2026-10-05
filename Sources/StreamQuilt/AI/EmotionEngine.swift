@@ -238,28 +238,41 @@ public final class TrackThemeEngine {
         pendingTrackID = nil
         inFlightTrackID = id
         classifyTrack(id: id, name: music.trackName, artist: music.artist,
-                      lines: Array(lines))
+                      album: music.album, genre: music.genre, lines: Array(lines))
     }
 
     // MARK: - Track classification
 
-    private func classifyTrack(id: String, name: String, artist: String, lines: [String]) {
+    private func classifyTrack(id: String, name: String, artist: String,
+                               album: String, genre: String, lines: [String]) {
         switch brain {
         case .laya:
             if let laya, laya.ready, laya.lanes.contains(.track) {
-                classifyTrackLaya(laya, id: id, name: name, artist: artist, lines: lines)
+                classifyTrackLaya(laya, id: id, name: name, artist: artist,
+                                  album: album, genre: genre, lines: lines)
             } else {
                 applyFallback(track: id, name: name)
             }
         case .ollama:
-            classifyTrackOllama(id: id, name: name, artist: artist, lines: lines)
+            classifyTrackOllama(id: id, name: name, artist: artist,
+                                album: album, genre: genre, lines: lines)
         }
     }
 
+    /// Rich judge context: album + genre when the library provides them.
+    private static func contextSuffix(album: String, genre: String) -> String {
+        var bits: [String] = []
+        if !album.isEmpty { bits.append("album: \(album)") }
+        if !genre.isEmpty { bits.append("genre: \(genre)") }
+        return bits.isEmpty ? "" : " (" + bits.joined(separator: ", ") + ")"
+    }
+
     private func classifyTrackLaya(_ laya: LayaClient, id: String, name: String,
-                                   artist: String, lines: [String]) {
+                                   artist: String, album: String, genre: String,
+                                   lines: [String]) {
         let lyricBlock = lines.isEmpty ? "" : " / " + lines.prefix(4).joined(separator: " / ")
-        let text = "\(name) by \(artist)\(lyricBlock)"
+        let text = "\(name) by \(artist)" + Self.contextSuffix(album: album, genre: genre)
+            + "\(lyricBlock)"
         print("[emotion] laya classifying \(id)...")
         laya.predict(lane: .track, text: text, questions: [
             "theme": ["type": "choice", "criteria": Theme.all.map { $0.id },
@@ -267,9 +280,12 @@ public final class TrackThemeEngine {
             "emotion": ["type": "choice", "criteria": Emotion.all.map { $0.id },
                         "instructions": "Pick the dominant emotion of this song."],
             // 1024-token track lane only — the 96-token ANE line lane would
-            // overflow on the criteria list alone.
-            "subject": ["type": "choice", "criteria": SubjectPool.all.map { $0.id },
-                        "instructions": "Pick the foreground subject that best fits this song's imagery."],
+            // overflow on the criteria list alone. Subject is arbitrated
+            // TWO-STAGE (category here, card in a follow-up call): the CoreML
+            // export caps each question at 32 option slots, and the card
+            // pool (34) exceeds it.
+            "subject_cat": ["type": "choice", "criteria": SubjectPool.categories,
+                            "instructions": "Pick the foreground subject category that best fits this song's imagery."],
             "fontset": ["type": "choice", "criteria": LyricFontPool.all.map { $0.id },
                         "instructions": "Pick the lyric poster font style by mood: "
                             + LyricFontPool.layaGuide],
@@ -301,9 +317,11 @@ public final class TrackThemeEngine {
                 self.usedHashFallback = false
                 self.lastTrackID = id
                 self.subjectRotation = 0
-                self.setSubject(resp.answers["subject"].flatMap { SubjectPool.byID($0) }
-                    ?? SubjectPool.all[Self.stableIndex("subject:" + id,
-                                                        modulo: SubjectPool.all.count)])
+                let cat = resp.answers["subject_cat"].flatMap {
+                    SubjectPool.categories.contains($0) ? $0 : nil
+                } ?? SubjectPool.categories[Self.stableIndex("subjectcat:" + id,
+                                                             modulo: SubjectPool.categories.count)]
+                self.arbitrateSubjectCard(laya, cat: cat, trackID: id, text: text)
                 // font arbitration: laya's pick, hash-stable pick if it
                 // answered with an unknown id
                 let fsID = resp.answers["fontset"].flatMap { LyricFontPool.byID($0)?.id }
@@ -319,14 +337,15 @@ public final class TrackThemeEngine {
         }
     }
 
-    private func classifyTrackOllama(id: String, name: String, artist: String, lines: [String]) {
+    private func classifyTrackOllama(id: String, name: String, artist: String,
+                                     album: String, genre: String, lines: [String]) {
         guard let ollama else {
             applyFallback(track: id, name: name)
             return
         }
         let lyricBlock = lines.isEmpty ? "(no lyrics available yet)" : lines.joined(separator: " / ")
         let user = """
-            Track: "\(name)" by \(artist).
+            Track: "\(name)" by \(artist)\(Self.contextSuffix(album: album, genre: genre)).
             First lyrics: \(lyricBlock)
             """
         print("[emotion] classifying \(id)...")
@@ -378,14 +397,39 @@ public final class TrackThemeEngine {
                            emberGain: emo.emberGain)
     }
 
+    /// Stage 2 of subject arbitration: pick the card inside the chosen
+    /// category (≤10 options — always under the 32-slot export cap).
+    private func arbitrateSubjectCard(_ laya: LayaClient, cat: String, trackID: String, text: String) {
+        let cards = SubjectPool.category(cat)
+        let hashPick = { cards[Self.stableIndex("subject:" + trackID, modulo: cards.count)] }
+        guard laya.ready, laya.lanes.contains(.track), cards.count > 1 else {
+            setSubject(hashPick())
+            emitPrompt(lyricLine: lastObservedLine)   // refresh with the card included
+            return
+        }
+        laya.predict(lane: .track, text: text, questions: [
+            "subject": ["type": "choice", "criteria": cards.map { $0.id },
+                        "instructions": "Pick the foreground subject that best fits this song's imagery."],
+        ]) { [weak self] resp in
+            DispatchQueue.main.async {
+                guard let self, self.currentMusicID == trackID else { return }
+                self.setSubject(resp?.answers["subject"].flatMap { SubjectPool.byID($0) }
+                    ?? hashPick())
+                self.emitPrompt(lyricLine: self.lastObservedLine)   // refresh with the card
+            }
+        }
+    }
+
     /// All brains down: deterministic emotion+theme picked by track-name hash.
     private func applyFallback(track id: String, name: String) {
         let emo = Emotion.all[Self.stableIndex(id, modulo: Emotion.all.count)]
         let theme = Theme.all[Self.stableIndex("theme:" + id, modulo: Theme.all.count)]
         pool = [(theme: theme, weight: 1.0)]
         subjectRotation = 0
-        setSubject(SubjectPool.all[Self.stableIndex("subject:" + id,
-                                                    modulo: SubjectPool.all.count)])
+        let cat = SubjectPool.categories[Self.stableIndex("subjectcat:" + id,
+                                                          modulo: SubjectPool.categories.count)]
+        let cards = SubjectPool.category(cat)
+        setSubject(cards[Self.stableIndex("subject:" + id, modulo: cards.count)])
         trackEmotion = emo
         lineEmotion = nil; lineEmotionProb = 0; lineEmotionID = ""
         usedHashFallback = true

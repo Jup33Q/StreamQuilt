@@ -12,6 +12,8 @@ public final class MusicBridge {
     public private(set) var line = ""        // "name — artist"
     public private(set) var trackName = ""
     public private(set) var artist = ""
+    public private(set) var album = ""       // album of current track (judge context)
+    public private(set) var genre = ""       // genre of current track (judge context)
     public private(set) var bpm = 0
     public private(set) var playing = false
     public private(set) var duration: Double = 0
@@ -90,33 +92,41 @@ public final class MusicBridge {
 
     private func poll() {
         DispatchQueue.global().async { [weak self] in
+            let t0 = Date()
             guard let out = Self.run(script: """
                 tell application "System Events" to if not (exists process "Music") then return ""
                 tell application "Music"
                     if player state is playing or player state is paused then
                         set t to current track
-                        return (player state as string) & "|" & player position & "|" & (time of t) & "|" & (name of t) & "|" & (artist of t) & "|" & (bpm of t)
+                        return (player state as string) & "|" & player position & "|" & (time of t) & "|" & (name of t) & "|" & (artist of t) & "|" & (bpm of t) & "|" & (album of t) & "|" & (genre of t)
                     end if
                 end tell
                 """) else { return }
             let s = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            // The reported position was true mid-query; extrapolating from the
+            // response time overestimates it by ~RTT/2 (lyric sync drift fix)
+            let rtt = Date().timeIntervalSince(t0)
             DispatchQueue.main.async {
                 guard let self else { return }
                 if s.isEmpty {
                     self.playing = false; self.line = ""; self.bpm = 0
-                    self.trackName = ""; self.artist = ""
+                    self.trackName = ""; self.artist = ""; self.album = ""; self.genre = ""
                     return
                 }
-                let p = s.split(separator: "|").map(String.init)
+                // split(omittingEmptySubsequences: false): album/genre may be
+                // empty strings and must keep their slots
+                let p = s.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
                 guard p.count >= 6 else { return }
                 self.playing = p[0] == "playing"
                 self.positionAtPoll = Double(p[1]) ?? 0
-                self.lastPollAt = Date()
+                self.lastPollAt = Date().addingTimeInterval(-rtt / 2)
                 self.duration = Self.parseMMSS(p[2])
                 self.trackName = p[3]
                 self.artist = p[4]
                 self.line = p[3] + " — " + p[4]
                 self.bpm = Int(p[5]) ?? 0
+                self.album = p.count > 6 ? p[6] : ""
+                self.genre = p.count > 7 ? p[7] : ""
             }
         }
     }

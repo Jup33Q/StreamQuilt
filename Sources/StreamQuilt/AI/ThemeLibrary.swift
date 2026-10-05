@@ -159,6 +159,9 @@ public enum SubjectPool {
         SubjectCard("sailboat", "光波帆船", "vehicle", "a tall sailboat on glowing waves"),
     ]
 
+    /// Category ids in pool order (people/animal/architecture/vehicle/food).
+    public static let categories = ["people", "animal", "architecture", "vehicle", "food"]
+
     public static func byID(_ id: String) -> SubjectCard? { all.first { $0.id == id } }
     public static func category(_ cat: String) -> [SubjectCard] { all.filter { $0.cat == cat } }
 }
