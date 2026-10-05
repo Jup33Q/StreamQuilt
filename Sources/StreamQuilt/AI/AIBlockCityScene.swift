@@ -22,6 +22,10 @@ public final class AIBlockCityScene {
     private let renderer: QuiltRenderer
     private let basePSO: MTLRenderPipelineState
     private let viewPSO: MTLRenderPipelineState
+    /// v5 groove pipelines (sceneMSL5). Used only when slowEnergy or kickEnv
+    /// is nonzero; at zero the v4 pipeline runs and output is bitwise S5.
+    private let basePSO5: MTLRenderPipelineState
+    private let viewPSO5: MTLRenderPipelineState
     public private(set) var staging: [MTLTexture]
     public private(set) var readBuffers: [MTLBuffer]
 
@@ -37,6 +41,8 @@ public final class AIBlockCityScene {
         var fovTan: Float; var pitch: Float; var aspect: Float
         var theme: SIMD4<Float>
         var audioPitch: Float   // tail-appended: detected pitch in hue turns (MIDI/12)
+        var slowEnergy: Float   // tail-appended v5: 2-4s phrase-energy EMA
+        var kickEnv: Float      // tail-appended v5: kick envelope (slow attack, fast release)
     }
 
     struct ViewParams {
@@ -46,6 +52,8 @@ public final class AIBlockCityScene {
         var renderSize: Float
         var theme: SIMD4<Float>
         var audioPitch: Float   // tail-appended: detected pitch in hue turns (MIDI/12)
+        var slowEnergy: Float   // tail-appended v5
+        var kickEnv: Float      // tail-appended v5
     }
 
     /// Supplies (bass, mid, treble, beat) each encode; nil = silence.
@@ -53,11 +61,16 @@ public final class AIBlockCityScene {
     /// Supplies the detected pitch in hue turns (MIDI/12) each encode;
     /// nil = 0 (bitwise-neutral — offline dumps stay identical).
     public var pitchProvider: (() -> Float)?
+    /// v5 fast/slow split: phrase-energy EMA + kick envelope for
+    /// geometry-level groove; nil = 0 (bitwise-neutral).
+    public var slowEnergyProvider: (() -> Float)?
+    public var kickEnvProvider: (() -> Float)?
 
     public init(renderer: QuiltRenderer, viewSize: Int = 512, stagingCount: Int = 8) throws {
         self.renderer = renderer
         self.viewSize = viewSize
         let lib = try renderer.device.makeLibrary(source: LKGShaderCommon.msl + Self.sceneMSL, options: nil)
+        let lib5 = try renderer.device.makeLibrary(source: LKGShaderCommon.msl + Self.sceneMSL5, options: nil)
 
         let bd = MTLRenderPipelineDescriptor()
         bd.vertexFunction = lib.makeFunction(name: "aiSceneVS")
@@ -70,6 +83,18 @@ public final class AIBlockCityScene {
         vd.fragmentFunction = lib.makeFunction(name: "aiViewFS")
         vd.colorAttachments[0].pixelFormat = .rgba8Unorm
         viewPSO = try renderer.device.makeRenderPipelineState(descriptor: vd)
+
+        let bd5 = MTLRenderPipelineDescriptor()
+        bd5.vertexFunction = lib5.makeFunction(name: "aiSceneVS")
+        bd5.fragmentFunction = lib5.makeFunction(name: "aiBaseFS")
+        bd5.colorAttachments[0].pixelFormat = .rgba16Float
+        basePSO5 = try renderer.device.makeRenderPipelineState(descriptor: bd5)
+
+        let vd5 = MTLRenderPipelineDescriptor()
+        vd5.vertexFunction = lib5.makeFunction(name: "aiSceneVS")
+        vd5.fragmentFunction = lib5.makeFunction(name: "aiViewFS")
+        vd5.colorAttachments[0].pixelFormat = .rgba8Unorm
+        viewPSO5 = try renderer.device.makeRenderPipelineState(descriptor: vd5)
 
         let sd = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: viewSize, height: viewSize, mipmapped: false)
@@ -91,7 +116,11 @@ public final class AIBlockCityScene {
             ? renderer.makeAltQuiltPassDescriptor(loadAction: .dontCare)
             : renderer.makeQuiltPassDescriptor(loadAction: .dontCare)
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
-        enc.setRenderPipelineState(basePSO)
+        let slow = slowEnergyProvider?() ?? 0
+        let kick = kickEnvProvider?() ?? 0
+        // v5 pipeline engages only when the groove uniforms are live; at
+        // (0, 0) the v4 pipeline produces bitwise-S5 output by construction.
+        enc.setRenderPipelineState(slow > 0 || kick > 0 ? basePSO5 : basePSO)
         var p = BaseParams(
             tileSize: SIMD2(Float(target.width) / Float(spec.columns),
                             Float(target.height) / Float(spec.rows)),
@@ -99,7 +128,9 @@ public final class AIBlockCityScene {
             cols: Float(spec.columns), rows: Float(spec.rows), time: t,
             size: sweep, flip: flip, dist: dist, camH: camH,
             fovTan: tan(fovY / 2), pitch: pitch, aspect: spec.tileAspect,
-            theme: themeBias, audioPitch: pitchProvider?() ?? 0)
+            theme: themeBias, audioPitch: pitchProvider?() ?? 0,
+            slowEnergy: slow,
+            kickEnv: kick)
         enc.setFragmentBytes(&p, length: MemoryLayout<BaseParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()
@@ -112,14 +143,18 @@ public final class AIBlockCityScene {
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
-        enc.setRenderPipelineState(viewPSO)
+        let slow = slowEnergyProvider?() ?? 0
+        let kick = kickEnvProvider?() ?? 0
+        enc.setRenderPipelineState(slow > 0 || kick > 0 ? viewPSO5 : viewPSO)
         var p = ViewParams(
             audio: audioProvider?() ?? .zero,
             time: time * timeScale,
             viewT: Float(viewIndex) / Float(renderer.spec.viewCount - 1),
             size: sweep, flip: flip, dist: dist, camH: camH,
             fovTan: tan(fovY / 2), pitch: pitch, renderSize: Float(viewSize),
-            theme: themeBias, audioPitch: pitchProvider?() ?? 0)
+            theme: themeBias, audioPitch: pitchProvider?() ?? 0,
+            slowEnergy: slow,
+            kickEnv: kick)
         enc.setFragmentBytes(&p, length: MemoryLayout<ViewParams>.stride, index: 0)
         enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         enc.endEncoding()

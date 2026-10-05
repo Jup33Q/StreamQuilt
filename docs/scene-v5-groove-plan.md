@@ -170,3 +170,19 @@ smin 球场本身只是「软球」，液体感来自表面张力、粘性流动
   --audio-source system；先 ps aux | grep -E "sq-|streamquilt" 清残留。
 - push 用 env -u ALL_PROXY -u all_proxy git -c http.version=HTTP/1.1 push。
 ```
+
+## S6 执行记录（2026-10-05 完成）
+
+- **架构变更（未在原文）**：v4 场景源码一字节不动（sceneMSL），v5 整套另存
+  sceneMSL5 独立 MTLLibrary，encode 时 slowEnergy>0 || kickEnv>0 选 v5 PSO。
+  原因：Metal fast-math 的 FMA 融合/重排使「数学上恒等的表达式编辑」也会
+  翻转像素（实测：拆局部变量、加 if 门控、系数 runtime 化全部漂移）；
+  函数返回值边界传参安全，内联表达式形态改动一律不安全。
+- 调参：地形 slow 系数 0.7→0.35（melt=1 时地形淹没中景）；溶球锚点
+  (-1.8,4.6,-5.0)、半径 0.38+0.20h（原 -2.6/4.2/-5.0 在相机大摆动下出画）；
+  相机 groove 1.1/0.6→0.85/0.5。
+- 验收：peek-dump 位级 = S5（f23068ef/4f39d076）；sq-demo md5 不变；
+  消融 on/off 几何差异显著（溶球+滴落+地形浪涌）；bench v4 21.3ms /
+  v5 27.1ms @7x8；实机 system 音源 60FPS、bass 峰值 0.5+、pitch 锁定、
+  blob/滴落离线矩阵（t=1.2/15/40）可见。
+- 观察：Music 实机两次自动暂停（36s/143s 处），原因未查明，非 app 行为。

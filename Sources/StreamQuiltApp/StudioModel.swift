@@ -49,6 +49,8 @@ final class StreamQuiltModel: ObservableObject {
     @Published var beatGlow: Float = 0 { didSet { if loaded { persistConfig() } } }
     /// Display-level beat HUE pulse amplitude in turns (rhythm -> hue, not brightness).
     @Published var beatHue: Float = 0.06 { didSet { if loaded { persistConfig() } } }
+    /// v5: display-level pitch->hue gain (pitchTurns straight into mainHue).
+    @Published var pitchHue: Float = 1.0 { didSet { if loaded { persistConfig() } } }
     /// Permanent raw-layer blend floor (CLI --alt-mix equivalent).
     @Published var altMix: Float = 0 {
         didSet { coordinator?.baseAltMix = altMix; if loaded { persistConfig() } }
@@ -93,6 +95,7 @@ final class StreamQuiltModel: ObservableObject {
     private let music = MusicBridge()
     private let analyzer = AudioAnalyzer()
     private let sysAudio = SystemAudioAnalyzer()
+    private let groove = GrooveEnvelope()   // v5: slowEnergy + kickEnv scene uniforms
     private let lyrics = LyricsService()
     /// 情感引擎（laya 本地决策模型：整曲主题 top-5 权重池 + 逐行情感滞后切换）。
     private let themeEngine = TrackThemeEngine()
@@ -358,10 +361,19 @@ final class StreamQuiltModel: ObservableObject {
         }
     }
 
+    /// v5 音高锚定分层：音高显色走显示层（60Hz 相干，无扩散衰减）。
+    private func pitchForDisplay() -> Float {
+        switch audioSource {
+        case .mic: return analyzer.current.pitchTurns
+        case .system: return sysAudio.current.pitchTurns
+        default: return 0
+        }
+    }
+
     private func displayHue() -> Float {
         let amp = beatHue * (audioSource == .music || audioSource == .system
                              ? (0.7 + 0.6 * themeEngine.effectiveEnergy) : 1)
-        return amp * beatForDisplay()
+        return amp * beatForDisplay() + pitchHue * pitchForDisplay()
     }
 
     /// Legacy brightness pulse (beatGlow > 0 only).
@@ -430,8 +442,15 @@ final class StreamQuiltModel: ObservableObject {
             if !musicActive { music.start(); musicActive = true }
             if micActive { analyzer.stop(); micActive = false }
             if sysActive { sysAudio.stop(); sysActive = false }
-            scene?.audioProvider = { [weak self] in self?.music.features ?? .zero }
+            scene?.audioProvider = { [weak self] in
+                guard let self else { return .zero }
+                let f = self.music.features
+                self.groove.push(bass: f.x, mid: f.y, beat: f.w)
+                return f
+            }
             scene?.pitchProvider = nil
+            scene?.slowEnergyProvider = { [weak self] in self?.groove.slowEnergy ?? 0 }
+            scene?.kickEnvProvider = { [weak self] in self?.groove.kick ?? 0 }
             coordinator?.beatClockProvider = { [weak self] in self?.music.beatClock }
         case .mic:
             if musicActive { music.stop(); musicActive = false }
@@ -440,9 +459,12 @@ final class StreamQuiltModel: ObservableObject {
             scene?.audioProvider = { [weak self] in
                 guard let self else { return .zero }
                 let f = self.analyzer.current
+                self.groove.push(bass: f.bass, mid: f.mid, beat: f.beat)
                 return SIMD4(f.bass, f.mid, f.treble, f.beat)
             }
             scene?.pitchProvider = { [weak self] in self?.analyzer.current.pitchTurns ?? 0 }
+            scene?.slowEnergyProvider = { [weak self] in self?.groove.slowEnergy ?? 0 }
+            scene?.kickEnvProvider = { [weak self] in self?.groove.kick ?? 0 }
             coordinator?.beatClockProvider = nil
         case .system:
             // metadata (beat clock/lyrics/emotion) stays on Music.app; only the
@@ -453,9 +475,12 @@ final class StreamQuiltModel: ObservableObject {
             scene?.audioProvider = { [weak self] in
                 guard let self else { return .zero }
                 let f = self.sysAudio.current
+                self.groove.push(bass: f.bass, mid: f.mid, beat: f.beat)
                 return SIMD4(f.bass, f.mid, f.treble, f.beat)
             }
             scene?.pitchProvider = { [weak self] in self?.sysAudio.current.pitchTurns ?? 0 }
+            scene?.slowEnergyProvider = { [weak self] in self?.groove.slowEnergy ?? 0 }
+            scene?.kickEnvProvider = { [weak self] in self?.groove.kick ?? 0 }
             coordinator?.beatClockProvider = { [weak self] in self?.music.beatClock }
         case .none:
             if musicActive { music.stop(); musicActive = false }
@@ -463,6 +488,8 @@ final class StreamQuiltModel: ObservableObject {
             if sysActive { sysAudio.stop(); sysActive = false }
             scene?.audioProvider = nil
             scene?.pitchProvider = nil
+            scene?.slowEnergyProvider = nil
+            scene?.kickEnvProvider = nil
             coordinator?.beatClockProvider = nil
         }
     }
@@ -509,6 +536,7 @@ final class StreamQuiltModel: ObservableObject {
         if d.object(forKey: "studio.lyricPrompt") != nil { lyricPrompt = d.bool(forKey: "studio.lyricPrompt") }
         if d.object(forKey: "studio.beatGlow") != nil { beatGlow = d.float(forKey: "studio.beatGlow") }
         if d.object(forKey: "studio.beatHue") != nil { beatHue = d.float(forKey: "studio.beatHue") }
+        if d.object(forKey: "studio.pitchHue") != nil { pitchHue = d.float(forKey: "studio.pitchHue") }
         if d.object(forKey: "studio.altMix") != nil { altMix = d.float(forKey: "studio.altMix") }
         if d.object(forKey: "studio.lyricOverlay") != nil { lyricOverlay = d.bool(forKey: "studio.lyricOverlay") }
         loaded = true
@@ -525,6 +553,7 @@ final class StreamQuiltModel: ObservableObject {
         defaults.set(lyricPrompt, forKey: "studio.lyricPrompt")
         defaults.set(beatGlow, forKey: "studio.beatGlow")
         defaults.set(beatHue, forKey: "studio.beatHue")
+        defaults.set(pitchHue, forKey: "studio.pitchHue")
         defaults.set(altMix, forKey: "studio.altMix")
         defaults.set(lyricOverlay, forKey: "studio.lyricOverlay")
     }

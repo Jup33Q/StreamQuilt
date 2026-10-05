@@ -51,6 +51,7 @@ struct CLI {
     var altMix: Float = 0       // 常驻原始层混合比（0-1；G 键按住时平滑推到 1）
     var beatGlow: Float = 0     // 旧版显示级节拍亮度脉冲幅度（已让位给 beatHue）
     var beatHue: Float = 0.06   // 显示级节拍色相脉冲幅度（turns；interlace 内主 quilt 色相旋转）
+    var pitchHue: Float = 1.0   // v5: 显示级音高→色相增益（pitchTurns 直接转入 mainHue，无扩散衰减）
     var overlayShift: Float = 0.10  // 歌词浮层视差全扫幅度（屏宽分数，默认已加强）
     var lyricPrompt = true      // L3 歌词行热调制 prompt（--no-lyric-prompt 关）
     var emotionEngine = true    // 情感引擎：曲目主题/情感分类 → prompt+场景 theme（仅 music 源）
@@ -105,6 +106,7 @@ while i < args.count {
     case "--alt-mix": cli.altMix = Float(args[i + 1]) ?? 0; i += 1
     case "--beat-glow": cli.beatGlow = Float(args[i + 1]) ?? 0.25; i += 1
     case "--beat-hue": cli.beatHue = Float(args[i + 1]) ?? 0.06; i += 1
+    case "--pitch-hue": cli.pitchHue = Float(args[i + 1]) ?? 1.0; i += 1
     case "--overlay-shift": cli.overlayShift = Float(args[i + 1]) ?? 0.10; i += 1
     case "--lyric-prompt": cli.lyricPrompt = true
     case "--no-lyric-prompt": cli.lyricPrompt = false
@@ -134,6 +136,16 @@ func makeClient() -> DiffusionClient {
                     units: cli.units.isEmpty ? nil : cli.units.split(separator: ",").map(String.init))
 }
 
+/// Offline audio ablation (--audio b,m,t,bt): fixed features + derived phrase
+/// energy so the v5 slow-geometry paths (melt range, blob presence, camera
+/// travel) are exercised offline too. kickEnv stays 0 (no beat edges offline).
+/// --audio 0,0,0,0 (or no flag) keeps every new uniform at 0: bitwise-neutral.
+func applyAudioOverride(_ scene: AIBlockCityScene, _ a: SIMD4<Float>) {
+    scene.audioProvider = { a }
+    scene.slowEnergyProvider = { min(1, max(0, a.x * 0.75 + a.y * 0.5)) }
+    scene.kickEnvProvider = { 0 }
+}
+
 func selectSpec() -> QuiltSpec {
     cli.grid == "11x6" ? .lkgGo : .lkgGo56
 }
@@ -142,7 +154,7 @@ do {
     if let peekPath = cli.peekDumpPath {
         let renderer = try QuiltRenderer(spec: selectSpec(), renderScale: cli.renderScale)
         let scene = try AIBlockCityScene(renderer: renderer, viewSize: cli.renderSize)
-        if let a = cli.audioOverride { scene.audioProvider = { a } }
+        if let a = cli.audioOverride { applyAudioOverride(scene, a) }
         // Offline peek check: raw raymarch into the alt quilt, interlaced from it.
         renderer.makeAltQuiltTarget()
         let calibration = Calibration.fetchFromBridge() ?? .lkgGoFallback
@@ -161,7 +173,7 @@ do {
         // eyeballed without the device or Music playing.
         let renderer = try QuiltRenderer(spec: selectSpec(), renderScale: cli.renderScale)
         let scene = try AIBlockCityScene(renderer: renderer, viewSize: cli.renderSize)
-        if let a = cli.audioOverride { scene.audioProvider = { a } }
+        if let a = cli.audioOverride { applyAudioOverride(scene, a) }
         let calibration = Calibration.fetchFromBridge() ?? .lkgGoFallback
         let ov = LyricOverlayRenderer(device: renderer.device)
         ov.titleLatinFontName = cli.titleLatinFont
@@ -204,7 +216,7 @@ do {
         // buffers like LKGApp does; grid via --grid, default 7x8).
         let renderer = try QuiltRenderer(spec: selectSpec(), renderScale: cli.renderScale)
         let scene = try AIBlockCityScene(renderer: renderer, viewSize: cli.renderSize)
-        if let a = cli.audioOverride { scene.audioProvider = { a } }
+        if let a = cli.audioOverride { applyAudioOverride(scene, a) }
         renderer.makeAltQuiltTarget()
         // warmup (shader/pipeline first-use cost stays out of the mean)
         for _ in 0..<3 {
@@ -231,7 +243,7 @@ do {
     if let dumpPath = cli.dumpPath {
         let renderer = try QuiltRenderer(spec: selectSpec(), renderScale: cli.renderScale)
         let scene = try AIBlockCityScene(renderer: renderer, viewSize: cli.renderSize)
-        if let a = cli.audioOverride { scene.audioProvider = { a } }
+        if let a = cli.audioOverride { applyAudioOverride(scene, a) }
         // Offline: render base, diffuse all views synchronously, save quilt PNG.
         let client = makeClient()
         client.start()
@@ -319,6 +331,7 @@ do {
     let music = MusicBridge()
     let analyzer = AudioAnalyzer()
     let sysAudio = SystemAudioAnalyzer()
+    let groove = GrooveEnvelope()   // v5: slowEnergy + kickEnv scene uniforms
     let lyrics = LyricsService()
     let themeEngine = TrackThemeEngine()
     let metadataActive = (cli.audioSource == "music" || cli.audioSource == "system")
@@ -375,10 +388,15 @@ do {
     }
     switch cli.audioSource {
     case "music":
-        scene.audioProvider = { music.features }
+        scene.audioProvider = {
+            let f = music.features
+            groove.push(bass: f.x, mid: f.y, beat: f.w)
+            return f
+        }
     case "mic":
         scene.audioProvider = {
             let f = analyzer.current
+            groove.push(bass: f.bass, mid: f.mid, beat: f.beat)
             return SIMD4(f.bass, f.mid, f.treble, f.beat)
         }
         scene.pitchProvider = { analyzer.current.pitchTurns }
@@ -386,6 +404,7 @@ do {
     case "system":
         scene.audioProvider = {
             let f = sysAudio.current
+            groove.push(bass: f.bass, mid: f.mid, beat: f.beat)
             return SIMD4(f.bass, f.mid, f.treble, f.beat)
         }
         scene.pitchProvider = { sysAudio.current.pitchTurns }
@@ -399,9 +418,12 @@ do {
         }
     default: break
     }
+    if cli.audioSource != "none" {
+        scene.slowEnergyProvider = { groove.slowEnergy }
+        scene.kickEnvProvider = { groove.kick }
+    }
 
     // L2 parallax lyric overlay: the device interlace samples this screen-space
-    // texture with a per-view shift. Fed from LyricsService line windows +
     // MusicBridge position extrapolation at 4 Hz; toggle with 'l'.
     var lyricOverlayEnabled = true
     let lyricOverlay = LyricOverlayRenderer(device: app.renderer.device)
@@ -459,12 +481,21 @@ do {
         default: return 0
         }
     }
+    // v5 音高锚定分层：AI 主层的音高显色走显示层（mainHue 60Hz 相干，无扩散
+    // 衰减）；场景内 audioPitch 保留给 raw 层 / G-peek。
+    let pitchForDisplay: () -> Float = {
+        switch cli.audioSource {
+        case "mic": return analyzer.current.pitchTurns
+        case "system": return sysAudio.current.pitchTurns
+        default: return 0
+        }
+    }
     app.mainHueProvider = {
         // 情感引擎 energy（含 chorus 短期 +0.3）缩放节拍脉冲；引擎关闭保持原样
         let amp: Float = (cli.emotionEngine && metadataActive)
             ? cli.beatHue * (0.7 + 0.6 * themeEngine.effectiveEnergy)
             : cli.beatHue
-        return amp * beatForDisplay()
+        return amp * beatForDisplay() + cli.pitchHue * pitchForDisplay()
     }
     if cli.beatGlow > 0 {
         app.mainGainProvider = { 1 + cli.beatGlow * beatForDisplay() }

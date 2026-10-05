@@ -1,11 +1,17 @@
 import Accelerate
 import Foundation
+import QuartzCore
 
 /// Shared analysis chain for the mic and system-audio paths: 2048-sample
 /// Hann-windowed FFT band energies + spectral-flux beat pulse + autocorrelation
 /// pitch detection. Feed arbitrary-length mono float32 chunks from any audio
 /// callback; analysis runs once per 1024 new samples over the latest 2048
 /// (~43 Hz at 48 kHz, 43 ms window — 80 Hz fundamentals stay detectable).
+///
+/// v5 normalization fix: band energy is the per-band PEAK magnitude
+/// (vDSP_maxv), not the mean — real drum transients are ~2 analysis frames
+/// wide and a band mean kept bass at 0.01-0.39; peak-per-band + instant-attack
+/// output smoothing lets real kicks hit 1.0.
 ///
 /// Pitch: partial autocorrelation over lags for 80–1200 Hz via pointer-offset
 /// `vDSP_dotpr` (no per-lag allocation), zero-lag-energy normalized for the
@@ -141,14 +147,16 @@ public final class AudioDSP {
         }
 
         let hzPerBin = sampleRate / Float(n)
+        // v5: per-band PEAK magnitude — transients (kick) survive; a band mean
+        // smeared 2-frame drum hits into the adaptive-peak floor
         func band(_ lo: Float, _ hi: Float) -> Float {
             let a = max(1, Int(lo / hzPerBin)), b = min(n / 2 - 1, Int(hi / hzPerBin))
             guard b > a else { return 0 }
             var s: Float = 0
             mags.withUnsafeBufferPointer { ptr in
-                vDSP_sve(ptr.baseAddress! + a, 1, &s, vDSP_Length(b - a))
+                vDSP_maxv(ptr.baseAddress! + a, 1, &s, vDSP_Length(b - a))
             }
-            return s / Float(b - a)
+            return s
         }
         var b = band(20, 150), m = band(150, 2000), tr = band(2000, 8000)
 
@@ -176,9 +184,11 @@ public final class AudioDSP {
         var o = output
         let onset = flux > fluxSmooth * 1.6 && flux > 0.001
         o.beat = onset ? 1.0 : o.beat * 0.88
-        o.bass = o.bass * 0.6 + b * 0.4
-        o.mid = o.mid * 0.6 + m * 0.4
-        o.treble = o.treble * 0.6 + tr * 0.4
+        // instant attack + smoothed release: kicks must hit full amplitude the
+        // frame they land, decay stays gentle so the scene doesn't strobe
+        o.bass = b > o.bass ? b : o.bass * 0.6 + b * 0.4
+        o.mid = m > o.mid ? m : o.mid * 0.6 + m * 0.4
+        o.treble = tr > o.treble ? tr : o.treble * 0.6 + tr * 0.4
         o.pitchConfidence = bestLag > 0 ? bestCorr : 0
         if bestLag > 0, bestCorr > 0.35 {
             let midi = 69 + 12 * log2(pitchHz / 440)
@@ -193,5 +203,39 @@ public final class AudioDSP {
         }
         output = o
         lock.unlock()
+    }
+}
+
+/// v5 fast/slow split (docs/scene-v5-groove-plan.md): img2img is a lossy
+/// channel — fast hue/brightness modulation does not survive diffusion, so
+/// fast variables go to the display layer and SLOW variables (phrase energy,
+/// 2-8 s) drive scene GEOMETRY. This envelope derives both scene inputs from
+/// the same features that feed the audio uniform:
+///   - slowEnergy: ~3 s EMA of weighted bass/mid — phrase-level energy
+///   - kick: re-triggered on beat rising edges, slow attack / fast release
+///     (camera push-ins must not snap, or they read as motion sickness)
+/// Fed from the audioProvider closures (every scene encode, ~60-90 Hz);
+/// unfed or silent input decays both outputs to exactly 0 (bitwise-neutral).
+public final class GrooveEnvelope {
+    public private(set) var slowEnergy: Float = 0
+    public private(set) var kick: Float = 0
+    private var lastT: CFTimeInterval?
+    private var prevBeat: Float = 0
+    private var kickT: CFTimeInterval = -10
+
+    public init() {}
+
+    @discardableResult
+    public func push(bass: Float, mid: Float, beat: Float,
+                     at t: CFTimeInterval = CACurrentMediaTime()) -> (slow: Float, kick: Float) {
+        defer { lastT = t; prevBeat = beat }
+        guard let lt = lastT else { return (0, 0) }   // first sample: no history yet
+        let dt = max(0, Float(t - lt))
+        let e = min(1, max(0, bass * 0.75 + mid * 0.5))
+        slowEnergy += (e - slowEnergy) * (1 - exp(-dt / 3))
+        if beat > 0.55, prevBeat <= 0.55 { kickT = t }
+        let kdt = max(0, Float(t - kickT))
+        kick = (1 - exp(-kdt / 0.14)) * exp(-max(0, kdt - 0.14) / 0.20)
+        return (slowEnergy, kick)
     }
 }
