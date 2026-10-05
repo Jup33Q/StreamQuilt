@@ -28,6 +28,9 @@ public final class AIBlockCityScene {
     private let viewPSO5: MTLRenderPipelineState
     public private(set) var staging: [MTLTexture]
     public private(set) var readBuffers: [MTLBuffer]
+    /// S7: per-staging raymarch depth target + readback (MRT attachment 1).
+    public private(set) var depthStaging: [MTLTexture]
+    public private(set) var depthReadBuffers: [MTLBuffer]
 
     /// Emotion-engine scene theme: (hueBias, crystalGain, columnGain, emberGain).
     /// Default is bitwise-neutral (hue +0, gains ×1) — offline dumps stay identical.
@@ -86,6 +89,9 @@ public final class AIBlockCityScene {
         vd.vertexFunction = lib.makeFunction(name: "aiSceneVS")
         vd.fragmentFunction = lib.makeFunction(name: "aiViewFS")
         vd.colorAttachments[0].pixelFormat = .rgba8Unorm
+        // attachment 1 declared but not written by the v4 shader: stays at
+        // the clear value (1.0 = far = full noise, i.e. pre-S7 behavior)
+        vd.colorAttachments[1].pixelFormat = .rgba8Unorm
         viewPSO = try renderer.device.makeRenderPipelineState(descriptor: vd)
 
         let bd5 = MTLRenderPipelineDescriptor()
@@ -98,6 +104,7 @@ public final class AIBlockCityScene {
         vd5.vertexFunction = lib5.makeFunction(name: "aiSceneVS")
         vd5.fragmentFunction = lib5.makeFunction(name: "aiViewFS")
         vd5.colorAttachments[0].pixelFormat = .rgba8Unorm
+        vd5.colorAttachments[1].pixelFormat = .rgba8Unorm
         viewPSO5 = try renderer.device.makeRenderPipelineState(descriptor: vd5)
 
         let sd = MTLTextureDescriptor.texture2DDescriptor(
@@ -106,6 +113,10 @@ public final class AIBlockCityScene {
         sd.storageMode = .shared
         staging = (0..<stagingCount).compactMap { _ in renderer.device.makeTexture(descriptor: sd) }
         readBuffers = (0..<stagingCount).compactMap { _ in
+            renderer.device.makeBuffer(length: viewSize * viewSize * 4, options: .storageModeShared)
+        }
+        depthStaging = (0..<stagingCount).compactMap { _ in renderer.device.makeTexture(descriptor: sd) }
+        depthReadBuffers = (0..<stagingCount).compactMap { _ in
             renderer.device.makeBuffer(length: viewSize * viewSize * 4, options: .storageModeShared)
         }
     }
@@ -148,6 +159,10 @@ public final class AIBlockCityScene {
         pass.colorAttachments[0].texture = staging[stagingIndex]
         pass.colorAttachments[0].loadAction = .dontCare
         pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[1].texture = depthStaging[stagingIndex]
+        pass.colorAttachments[1].loadAction = .clear
+        pass.colorAttachments[1].clearColor = MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1)
+        pass.colorAttachments[1].storeAction = .store
         guard let enc = cmd.makeRenderCommandEncoder(descriptor: pass) else { return }
         let slow = slowEnergyProvider?() ?? 0
         let kick = kickEnvProvider?() ?? 0
@@ -168,7 +183,8 @@ public final class AIBlockCityScene {
         enc.endEncoding()
     }
 
-    /// Encode an async readback of a staging texture into its read buffer (RGBA8).
+    /// Encode an async readback of a staging texture + its depth target
+    /// into their read buffers (RGBA8 each).
     public func encodeReadback(cmd: MTLCommandBuffer, stagingIndex: Int) {
         guard let blit = cmd.makeBlitCommandEncoder() else { return }
         blit.copy(from: staging[stagingIndex], sourceSlice: 0, sourceLevel: 0,
@@ -177,12 +193,24 @@ public final class AIBlockCityScene {
                   to: readBuffers[stagingIndex], destinationOffset: 0,
                   destinationBytesPerRow: viewSize * 4,
                   destinationBytesPerImage: viewSize * viewSize * 4)
+        blit.copy(from: depthStaging[stagingIndex], sourceSlice: 0, sourceLevel: 0,
+                  sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                  sourceSize: MTLSize(width: viewSize, height: viewSize, depth: 1),
+                  to: depthReadBuffers[stagingIndex], destinationOffset: 0,
+                  destinationBytesPerRow: viewSize * 4,
+                  destinationBytesPerImage: viewSize * viewSize * 4)
         blit.endEncoding()
     }
 
     /// RGBA bytes of a completed readback.
     public func readbackBytes(stagingIndex: Int) -> UnsafeRawBufferPointer {
         UnsafeRawBufferPointer(start: readBuffers[stagingIndex].contents(),
+                               count: viewSize * viewSize * 4)
+    }
+
+    /// RGBA bytes of a completed depth readback (S7; depth in every channel).
+    public func readbackDepthBytes(stagingIndex: Int) -> UnsafeRawBufferPointer {
+        UnsafeRawBufferPointer(start: depthReadBuffers[stagingIndex].contents(),
                                count: viewSize * viewSize * 4)
     }
 

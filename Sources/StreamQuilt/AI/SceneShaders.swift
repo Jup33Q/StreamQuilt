@@ -965,7 +965,8 @@ extension AIBlockCityScene {
 
     static float3 shadeScene(float3 ro, float3 dir, float2 ndc, float time,
                              float4 audio, float4 theme, float audioPitch,
-                             float slow, float kick, float accum) {
+                             float slow, float kick, float accum,
+                             thread float& depthOut) {
         // CLASH palette: complementary hue pairs orbit the wheel together
         // with the music (mid/treble = big swing), per-element multipliers
         // make layers land on different hues for extra clash.
@@ -1006,6 +1007,9 @@ extension AIBlockCityScene {
             tRay += dm.x * 0.95;
             if (tRay > 70.0) break;
         }
+        // S7 depth branch: free raymarch depth for the diffusion worker's
+        // depth-weighted noise blending (0 = near/preserve, 1 = far/free)
+        depthOut = m < -0.5 ? 1.0 : 1.0 - exp(-tRay * 0.04);
 
         float3 sky = skyColor(dir, time, audio, hueShift);
 
@@ -1170,12 +1174,20 @@ extension AIBlockCityScene {
         float off = lkgViewOffset(ti.viewT, P.size, P.flip);
         float3 ro = float3(off, P.camH, P.dist);
         float3 dir = lkgViewRay(ti, off, P.dist, P.fovTan, P.aspect, P.pitch);
+        float depthDummy;
         return float4(shadeScene(ro, dir, ti.tileNDC, P.time, P.audio, P.theme,
-                                 P.audioPitch, P.slowEnergy, P.kickEnv, P.accumEnergy), 1.0);
+                                 P.audioPitch, P.slowEnergy, P.kickEnv, P.accumEnergy,
+                                 depthDummy), 1.0);
     }
 
-    // Single-view LDR render (square staging) as diffusion img2img input.
-    fragment float4 aiViewFS(float4 fpos [[position]], constant AIViewParams& P [[buffer(0)]]) {
+    struct AIViewOut {
+        float4 c [[color(0)]];
+        float4 d [[color(1)]];
+    };
+
+    // Single-view LDR render (square staging) as diffusion img2img input,
+    // MRT: color + raymarch depth (S7).
+    fragment AIViewOut aiViewFS(float4 fpos [[position]], constant AIViewParams& P [[buffer(0)]]) {
         float2 uv = float2(fpos.x / P.renderSize, 1.0 - fpos.y / P.renderSize);
         float2 ndc = uv * 2.0 - 1.0;
         float off = lkgViewOffset(P.viewT, P.size, P.flip);
@@ -1183,8 +1195,14 @@ extension AIBlockCityScene {
         float3 dir = normalize(float3(ndc.x * P.fovTan, ndc.y * P.fovTan, -1.0));
         float cp = cos(P.pitch), sp = sin(P.pitch);
         dir = float3(dir.x, dir.y * cp + dir.z * sp, -dir.y * sp + dir.z * cp);
-        return float4(aces(shadeScene(ro, dir, ndc, P.time, P.audio, P.theme,
-                                      P.audioPitch, P.slowEnergy, P.kickEnv, P.accumEnergy)), 1.0);
+        float depth;
+        float3 col = shadeScene(ro, dir, ndc, P.time, P.audio, P.theme,
+                                P.audioPitch, P.slowEnergy, P.kickEnv, P.accumEnergy,
+                                depth);
+        AIViewOut o;
+        o.c = float4(aces(col), 1.0);
+        o.d = float4(depth, depth, depth, 1.0);
+        return o;
     }
     """
 }

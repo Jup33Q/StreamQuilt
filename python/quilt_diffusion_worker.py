@@ -7,7 +7,9 @@ pipeline (streamdiffusion-mac), and writes raw RGB results to stdout.
 
 Wire protocol (all little-endian, no length prefix wrapper):
 
-  Input frame:  <<view_index::u32, width::u32, height::u32, rgb[w*h*3]>>
+  Input frame:  <<view_index::u32, width::u32, height::u32, rgb[w*h*3],
+                  depth[w*h]>>  (depth 0 = near/preserve, 255 = far/free; the
+                  sender always transmits it, all-0xFF = uniform legacy noise)
   Input prompt: <<0xFFFFFFFF::u32, prompt_len::u32, prompt_bytes>>
   Input seed:   <<0xFFFFFFFD::u32, seed::u32, 0::u32>>
   Output frame: <<view_index::u32, width::u32, height::u32, rgba[w*h*4]>>
@@ -144,6 +146,22 @@ def main():
     # per-view temporal feedback buffers (view_index -> latent)
     prev_by_view = {}
 
+    import cv2 as _cv2
+
+    _DEPTH_NOISE_MIN = 0.25   # near floor: keep some style even on closest hits
+
+    def depth_to_mask(depth_frame):
+        """u8 depth (0=near) -> fp16 latent-space noise mask (1, 1, L, L)."""
+        size = pipeline.render_size
+        lat = pipeline.latent_size
+        d = depth_frame.astype(np.float32) / 255.0
+        if d.shape[0] != size:
+            d = _cv2.resize(d, (size, size), interpolation=_cv2.INTER_AREA)
+        m = _cv2.resize(d, (lat, lat), interpolation=_cv2.INTER_AREA)
+        m = _cv2.GaussianBlur(m, (5, 5), 0)   # no seams at mask boundaries
+        m = _DEPTH_NOISE_MIN + (1.0 - _DEPTH_NOISE_MIN) * m
+        return m.astype(np.float16)[None, None]
+
     # Optional batched UNet (one ANE/GPU call stylizes several views).
     unet_batched = None
     if args.batch > 1:
@@ -154,11 +172,12 @@ def main():
         print(f"[worker {args.worker_id}] batched UNet: {bpath}", file=sys.stderr, flush=True)
 
     def process_batch(frames):
-        """frames: list of (view_index, rgb ndarray). Batched UNet path."""
+        """frames: list of (view_index, rgb ndarray, depth ndarray). Batched UNet path."""
         import cv2
         size = pipeline.render_size
         latents = []
-        for view, frame in frames:
+        cleans = []
+        for view, frame, depth_frame in frames:
             h, w = frame.shape[:2]
             if w > h:
                 off = (w - h) // 2
@@ -176,6 +195,7 @@ def main():
                 clean = (1.0 - fb) * clean + fb * prev
             noisy = pipeline._sqrt_a * clean + pipeline._sqrt_1ma * pipeline._fixed_noise
             latents.append(noisy)
+            cleans.append(clean)
         B = len(latents)
         lat = np.concatenate(latents, axis=0)
         tbuf = np.full((B,), pipeline._t_buf[0], dtype=np.float16)
@@ -184,8 +204,9 @@ def main():
                                   "encoder_hidden_states": embeds})
         npred = np.array(u["noise_pred"]).astype(np.float16)
         denoised = (lat - pipeline._sqrt_1ma * npred) / pipeline._sqrt_a
-        for i, (view, _) in enumerate(frames):
+        for i, (view, _, depth_frame) in enumerate(frames):
             one = denoised[i:i + 1]
+            one = depth_to_mask(depth_frame) * one + (np.float16(1.0) - depth_to_mask(depth_frame)) * cleans[i]
             prev_by_view[view] = one.copy()
             dec = pipeline.vae_decoder.predict({"latent": one})
             r = np.array(dec["image"]).astype(np.float32).squeeze(0).transpose(1, 2, 0)
@@ -226,18 +247,23 @@ def main():
         pixels = read_exact(width * height * 3)
         if pixels is None:
             break
+        depth_bytes = read_exact(width * height)
+        if depth_bytes is None:
+            break
         frame = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 3)
+        depth_frame = np.frombuffer(depth_bytes, dtype=np.uint8).reshape(height, width)
 
         if unet_batched is None:
-            # single-view path with per-view feedback swap
+            # single-view path with per-view feedback swap + depth mask
             pipeline._prev_denoised = prev_by_view.get(view_index)
+            pipeline.depth_mask = depth_to_mask(depth_frame)
             result = pipeline.process_frame_rgb(frame)
             prev_by_view[view_index] = pipeline._prev_denoised
             write_view_frame(view_index, result)
             continue
 
         # batched path: gather more pending frames (non-blocking, short window)
-        batch = [(view_index, frame)]
+        batch = [(view_index, frame, depth_frame)]
         deadline = time.time() + 0.012
         while len(batch) < args.batch:
             remaining = deadline - time.time()
@@ -261,7 +287,11 @@ def main():
             px2 = read_exact(w2 * h2 * 3)
             if px2 is None:
                 break
-            batch.append((v2, np.frombuffer(px2, dtype=np.uint8).reshape(h2, w2, 3)))
+            db2 = read_exact(w2 * h2)
+            if db2 is None:
+                break
+            batch.append((v2, np.frombuffer(px2, dtype=np.uint8).reshape(h2, w2, 3),
+                          np.frombuffer(db2, dtype=np.uint8).reshape(h2, w2)))
         process_batch(batch)
         frame = np.frombuffer(pixels, dtype=np.uint8).reshape(height, width, 3)
 

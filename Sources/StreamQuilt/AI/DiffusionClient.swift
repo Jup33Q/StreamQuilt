@@ -85,10 +85,13 @@ public final class DiffusionClient {
         return idx
     }
 
-    /// Submit a view frame to a previously reserved worker.
-    public func submitReserved(workerIndex: Int, view: Int, rgb: Data, width: Int, height: Int) {
+    /// Submit a view frame to a previously reserved worker. `depth` (1 byte
+    /// per pixel, 0 = near) rides along for depth-weighted denoising (S7);
+    /// pass nil for pre-S7 behavior (uniform full noise).
+    public func submitReserved(workerIndex: Int, view: Int, rgb: Data, depth: Data?,
+                               width: Int, height: Int) {
         let w = workers[workerIndex]
-        writePacket(to: w, view: view, rgb: rgb, width: width, height: height)
+        writePacket(to: w, view: view, rgb: rgb, depth: depth, width: width, height: height)
     }
 
     /// Cancel a reservation without submitting (e.g. staging render failed).
@@ -202,21 +205,33 @@ public final class DiffusionClient {
         }
     }
 
-    /// Submit a view frame (RGB, 3 channels). Returns false if no worker is idle.
-    public func submit(view: Int, rgb: Data, width: Int, height: Int) -> Bool {
+    /// Submit a view frame (RGB, 3 channels + 1-channel depth). Returns
+    /// false if no worker is idle.
+    public func submit(view: Int, rgb: Data, depth: Data?, width: Int, height: Int) -> Bool {
         guard let idx = reserveWorker() else { return false }
-        submitReserved(workerIndex: idx, view: view, rgb: rgb, width: width, height: height)
+        submitReserved(workerIndex: idx, view: view, rgb: rgb, depth: depth,
+                       width: width, height: height)
         return true
     }
 
-    private func writePacket(to w: Worker, view: Int, rgb: Data, width: Int, height: Int) {
+    private func writePacket(to w: Worker, view: Int, rgb: Data, depth: Data?,
+                             width: Int, height: Int) {
         var header = Data()
         header.append(contentsOf: withUnsafeBytes(of: UInt32(view).littleEndian) { Array($0) })
         header.append(contentsOf: withUnsafeBytes(of: UInt32(width).littleEndian) { Array($0) })
         header.append(contentsOf: withUnsafeBytes(of: UInt32(height).littleEndian) { Array($0) })
+        // depth is always transmitted (protocol is lockstep with the worker);
+        // nil -> all-far (0xFF), which reproduces uniform full-noise behavior
+        var payload = depth ?? Data(count: width * height)
+        if depth == nil {
+            payload.withUnsafeMutableBytes { ptr in
+                memset(ptr.baseAddress!, 0xFF, width * height)
+            }
+        }
         writeLock.lock()
         w.stdinHandle.write(header)
         w.stdinHandle.write(rgb)
+        w.stdinHandle.write(payload)
         writeLock.unlock()
     }
 
@@ -244,8 +259,10 @@ public final class DiffusionClient {
     }
 
     /// Synchronous round trip for offline/dump mode.
-    public func processSync(view: Int, rgb: Data, width: Int, height: Int, timeout: TimeInterval = 30) -> Result? {
-        guard submit(view: view, rgb: rgb, width: width, height: height) else { return nil }
+    public func processSync(view: Int, rgb: Data, depth: Data?, width: Int, height: Int,
+                            timeout: TimeInterval = 30) -> Result? {
+        guard submit(view: view, rgb: rgb, depth: depth, width: width, height: height)
+        else { return nil }
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             resultLock.lock()

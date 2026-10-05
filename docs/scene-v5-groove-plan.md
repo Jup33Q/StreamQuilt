@@ -197,3 +197,11 @@ smin 球场本身只是「软球」，液体感来自表面张力、粘性流动
 - 去泛白：场景饱和度 0.85–1.0、辉光/地平线/fog 收敛；默认 prompt
   pastel → vivid highly saturated。
 - 回归：peek-dump 默认仍 f23068ef（v4 冻结不受影响）；sq-demo md5 不变。
+
+## S7 深度参考旁支（2026-10-05 追加，超出原 plan 范围）
+
+- raymarch tRay 经 MRT 输出逐视角深度（v4 不写入=全远=旧行为），worker 按
+  深度在 **latent 输出侧** 合成 `m*denoised + (1-m)*clean`。
+- 教训：1-step turbo 下「深度缩放注入噪声」会让整图丢风格变浆糊（npred 假定
+  统一 t）；输出侧合成不动采样数学，一次通过。
+- 实测：60FPS / 44 tiles/s 无回退，dump 时长不变。

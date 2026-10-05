@@ -269,7 +269,9 @@ do {
 
             let vs = scene.viewSize
             let src = scene.readbackBytes(stagingIndex: 0).bindMemory(to: UInt8.self)
+            let dsrc = scene.readbackDepthBytes(stagingIndex: 0).bindMemory(to: UInt8.self)
             var rgb = Data(count: vs * vs * 3)
+            var depth = Data(count: vs * vs)
             rgb.withUnsafeMutableBytes { out in
                 let o = out.baseAddress!.assumingMemoryBound(to: UInt8.self)
                 for px in 0..<(vs * vs) {
@@ -278,7 +280,12 @@ do {
                     o[px * 3 + 2] = src[px * 4 + 2]
                 }
             }
-            guard let r = client.processSync(view: v, rgb: rgb, width: vs, height: vs) else {
+            depth.withUnsafeMutableBytes { out in
+                let o = out.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                for px in 0..<(vs * vs) { o[px] = dsrc[px * 4] }
+            }
+            guard let r = client.processSync(view: v, rgb: rgb, depth: depth,
+                                             width: vs, height: vs) else {
                 print("view \(v): worker timeout, skipped"); continue
             }
             // N1: same brightness normalization as the live coordinator

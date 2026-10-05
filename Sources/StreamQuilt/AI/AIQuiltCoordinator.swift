@@ -242,7 +242,9 @@ public final class AIQuiltCoordinator {
             let lag = (CACurrentMediaTime() - commitAt) * 1000
             let vs = self.scene.viewSize
             let src = self.scene.readbackBytes(stagingIndex: slot).bindMemory(to: UInt8.self)
+            let dsrc = self.scene.readbackDepthBytes(stagingIndex: slot).bindMemory(to: UInt8.self)
             var rgb = Data(count: vs * vs * 3)
+            var depth = Data(count: vs * vs)
             rgb.withUnsafeMutableBytes { out in
                 let o = out.baseAddress!.assumingMemoryBound(to: UInt8.self)
                 for i in 0..<(vs * vs) {
@@ -251,8 +253,12 @@ public final class AIQuiltCoordinator {
                     o[i * 3 + 2] = src[i * 4 + 2]
                 }
             }
+            depth.withUnsafeMutableBytes { out in
+                let o = out.baseAddress!.assumingMemoryBound(to: UInt8.self)
+                for i in 0..<(vs * vs) { o[i] = dsrc[i * 4] }
+            }
             self.client.submitReserved(workerIndex: workerIndex, view: v, rgb: rgb,
-                                       width: vs, height: vs)
+                                       depth: depth, width: vs, height: vs)
             self.stateLock.lock()
             self.stagingInUse[slot] = false
             self.inputLuma[v] = lumaMean(rgb, bytesPerPixel: 3)
