@@ -139,6 +139,13 @@ public enum SubjectPool {
         SubjectCard("skycastle", "天空城堡", "architecture", "a floating castle above the clouds"),
         SubjectCard("ruins", "沙漠遗迹", "architecture", "overgrown ancient desert ruins"),
         SubjectCard("torii", "海上鸟居", "architecture", "a seaside torii shrine gate"),
+        // food
+        SubjectCard("candy", "缤纷糖果", "food", "giant colorful candies and lollipops"),
+        SubjectCard("cottoncandy", "棉花糖云", "food", "fluffy pink cotton candy clouds"),
+        SubjectCard("ricebowl", "热气盖饭", "food", "a bowl of steaming rice with rich toppings"),
+        SubjectCard("ramen", "蒸汽拉面", "food", "a bowl of ramen with swirling steam"),
+        SubjectCard("cake", "草莓蛋糕", "food", "a towering strawberry layer cake"),
+        SubjectCard("boba", "珍珠奶茶", "food", "a giant boba milk tea with pearls"),
         // vehicles
         SubjectCard("biplane", "双翼飞机", "vehicle", "a vintage biplane trailing smoke"),
         SubjectCard("steamtrain", "蒸汽火车", "vehicle", "a steam locomotive crossing a viaduct"),

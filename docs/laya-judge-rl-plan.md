@@ -16,7 +16,7 @@
   - `multilingual`（CPU+GPU，1024-token **track 车道**）
   - `multilingual-ane`（ANE，96-token **line 车道**）
 - 应用侧（`Sources/StreamQuilt/AI/EmotionEngine.swift` TrackThemeEngine）：
-  - track 车道 4 问：theme(18)/emotion(14)/fontset(9)/subject(24)；
+  - track 车道 4 问：theme(18)/emotion(14)/fontset(9)/subject(30)；
   - line 车道 2 问：pool pick(≤5)/emotion(14)——**96 token 放不下更多 criteria，
     任何新决策维度只能进 track 车道**；
   - top-5 主题池 EMA(0.55/0.45) 逐行重排；行情感 +0.15 滞回；hash 兜底
@@ -110,7 +110,7 @@ ANE 时延不变、hash 兜底不变）。
 2. ~/Desktop/StreamQuilt/Sources/StreamQuilt/AI/EmotionEngine.swift ← TrackThemeEngine
    （track 车道 4 问 / line 车道 2 问 / top-5 池 EMA / 滞回 / hash 兜底）
 3. ~/Desktop/StreamQuilt/Sources/StreamQuilt/AI/ThemeLibrary.swift ← Theme.all=18 +
-   SubjectPool=24（夹具的答案空间）
+   SubjectPool=30（夹具的答案空间）
 4. ~/.kimi-code/skills/streamquilt/SKILL.md（laya 概率位置、modulo 越界坑、ANE 车道预算）
 
 关键上下文：
