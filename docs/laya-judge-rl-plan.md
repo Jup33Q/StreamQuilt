@@ -124,6 +124,12 @@ ANE 时延不变、hash 兜底不变）。
 
 - 训练侧新目录（不在本 repo）：`~/Documents/kimi/workspace/laya-rl/`（数据/脚本/checkpoint），
   转 CoreML 走 `mizorewww/laya-coreml` 转换管线，落 `laya-coreml/models/` 新目录灰度。
+- **参数/数据同步仓（HF，私有）**：`Jup33QE/laya_lyrics_streamer`
+  （<https://huggingface.co/Jup33QE/laya_lyrics_streamer>）。目录约定
+  `checkpoints/<tag>/`、`coreml/<tag>/`、`data/`（夹具/偏好对）、`reports/`；
+  推送 `hf upload Jup33QE/laya_lyrics_streamer <本地> <远端路径>`，
+  拉取 `hf download Jup33QE/laya_lyrics_streamer <路径>`。
+  夹具与 R0 基线已入库（`data/laya_judge_fixture.jsonl`、`reports/laya-judge-baseline.md`）。
 - 切换纪律：新 checkpoint 先 shadow ≥2 天；任何回退一键还原目录名；hash 兜底永不动。
 - 防退化红线：夹具 ECE 不回退；line 车道 96 token 预算不动；ANE 转换后逐题对比
   CPU 版答案一致率 100%（沿用出厂 fixture 模式）。
