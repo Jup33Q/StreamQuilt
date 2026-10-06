@@ -6,18 +6,24 @@
 ![AI](https://img.shields.io/badge/AI-CoreML%20%C2%B7%20ANE%2BGPU-purple)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-Real-time quilt rendering for Looking Glass light field displays, in pure Swift + Metal.
+Real-time quilt rendering for Looking Glass light field displays, in pure Swift + Metal —
+with an optional AI pipeline that turns the panel into a self-VJing holographic jukebox:
+the scene is repainted per view by local diffusion while an on-device 322M judge model
+reads the playing song (metadata + lyrics) and steers theme, emotion, foreground subject
+and lyric typography. No Unity, no web stack, no cloud.
 
-Renders an animated scene into a multi-view quilt every frame, interlaces it with the
-device's factory optical calibration, and displays it fullscreen on the panel —
-no Unity, no web stack, ~60 FPS on Apple Silicon.
-
-| Quilt (66 views, 11x6) | Interlaced panel image |
+| Same view, two layers | |
 |---|---|
-| ![quilt](docs/example-quilt.jpg) | ![lenticular](docs/example-lenticular.jpg) |
+| ![AI-stylized view](docs/example-ai-tile.png) | ![raw raymarch view](docs/example-raw-tile.png) |
+| AI-stylized (StreamDiffusion img2img, CoreML) | raw raymarch layer (hold-G peek) |
+
+| AI quilt (7x8 = 56 views) | raw quilt + lyric overlay, interlaced for the panel |
+|---|---|
+| ![AI quilt](docs/example-ai-quilt-v5.png) | ![interlaced with overlay](docs/example-overlay.png) |
 
 Verified on Looking Glass Go (LKG-E10707) + Apple M5 Max @ 60 FPS, GPU ~9.5 ms/frame
-at full 4092x4092 quilt resolution.
+at full 4092x4092 quilt resolution (base demo scene); the AI pipeline holds 60 FPS
+display with ~45 AI tiles/s repainting the quilt in the background.
 
 ## How it works
 
@@ -257,6 +263,12 @@ Apple Music's PCM is DRM-protected — MusicKit cannot hand us audio buffers. In
   band energies + spectral-flux onsets — works with any audible source.
   Requires the app-bundled build for the mic permission prompt:
   `bash scripts/build_app.sh`, then run `.build/StreamQuilt-AI-Demo.app/Contents/MacOS/sq-ai-demo`.
+- **`SystemAudioAnalyzer`** (`--audio-source system`): the real playback output via
+  ScreenCaptureKit (2x2/1fps video + 48k mono audio, Music.app targeted when running) —
+  true bass/mid/treble energies, spectral-flux beats and an autocorrelation pitch track
+  (confidence-gated, mapped to display hue). Metadata/beat clock/lyrics still come from
+  MusicBridge; only the audio features switch to the captured mix. Needs the
+  "Screen & System Audio Recording" permission (app-bundled build).
 
 Scene v4 shader effects: the sun drifts on a lissajous path with lava-ball
 surface displacement and wax drips, the mandelbox crystal orbits slowly behind
@@ -268,7 +280,9 @@ settle back to hard surfaces. Beat drives HUE swings (palette kick + display
 hue rotation), not brightness flashes; final output is capped at 0.7 luminance
 and darker sun/crystal regions blend into the sky (luminance-keyed
 transparency). A parallax lyric overlay (liquid-glass karaoke text, track
-progress bar) is sampled per-view inside the interlace.
+progress bar) is sampled per-view inside the interlace:
+
+![lyric overlay texture](docs/example-overlay-overlay.png)
 
 ### Migration tracks (M3/M4 conclusions)
 
@@ -280,6 +294,43 @@ progress bar) is sampled per-view inside the interlace.
   `scripts/coreai_smoke_test.py` converts a torch model end-to-end; Swift loads
   it via `AIModel(contentsOf:)`, and `NDArray(unsafeBuffer: MTLBuffer...)` gives
   zero-copy Metal interop. Full analysis: [docs/coreai-migration.md](docs/coreai-migration.md).
+
+## Emotion engine: an on-device judge steers the visuals
+
+Instead of one static prompt, the AI demo asks **laya**
+([convaiinnovations/laya-multilingual](https://huggingface.co/convaiinnovations/laya-multilingual),
+a 322M mmBERT fine-tuned with RL on strictly proper scoring rules — its
+calibrated probabilities are the point) to judge every song:
+
+- **Track lane** (1024-token CoreML model, CPU+GPU): one call per song picks
+  **theme** (18 visual styles), **emotion** (14), **subject category** (5, then a
+  second call picks the concrete card — the 34-card pool exceeds the CoreML
+  32-option export cap, so arbitration is two-stage) and **lyric font set** (9).
+- **Line lane** (96-token model on the **ANE**): every lyric-line switch
+  re-ranks the active top-5 theme pool (EMA 0.55/0.45) and updates the line
+  emotion with +0.15 hysteresis against jitter.
+- The composed prompt = sampled theme + subject card + emotion style + current
+  lyric line + fixed quality tail. Everything degrades gracefully: a
+  deterministic track-name hash picks themes when laya is not ready, so the
+  show never stalls.
+
+**Improving the judge with RL** (docs/laya-judge-rl-plan.md): decisions are
+logged to JSONL, a 120-track fixture is labeled by a dual-teacher jury
+(gemma4:e4b-mlx + qwen3.8:27b-mlx, per-field agreement) with a heavyweight
+arbiter (gemma4:31b) for splits, and `python/laya_judge_eval.py` measures
+top-1/top-3 + 10-bucket ECE on the app-identical question set. Baseline:
+theme 0.100 / emotion 0.175 / subject-card 0.108 top-1 — the R1 (iterative DPO,
+proper-scoring-rule auxiliary loss) and R2 (GRPO with composite on-device
+rewards) stages improve from there. Checkpoints and fixture versions sync via a
+private HF repo.
+
+## StreamQuilt Studio (GUI)
+
+`streamquilt` (built by `scripts/build_app.sh` into `StreamQuilt.app`) wraps the
+same pipeline in a SwiftUI control panel: prompt editor with history, render
+size / worker count / grid / strength, audio source picker
+(Music / Mic / System / Off), live tiles/s and per-view refresh stats, current
+emotion · theme · subject readout, and persistent settings.
 
 ## License
 
