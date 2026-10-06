@@ -168,6 +168,7 @@ final class StreamQuiltModel: ObservableObject {
         layaClient = lc
         themeEngine.brain = .laya
         themeEngine.laya = lc
+        themeEngine.decisionLog = DecisionLogger(path: repoRootPath + "/logs/decisions.jsonl")
         lc.onReady = { [weak themeEngine] in themeEngine?.layaReady() }
         themeEngine.onTheme = { [weak self] t in
             self?.scene?.themeBias = SIMD4(t.hueBias, t.crystalGain, t.columnGain, t.emberGain)

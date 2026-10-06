@@ -119,6 +119,9 @@ public final class TrackThemeEngine {
     public var ollama: OllamaClient?
     /// laya sidecar client; nil disables laya queries (hash fallback works).
     public var laya: LayaClient?
+    /// R0 decision log (docs/laya-judge-rl-plan.md): track classifications,
+    /// subject arbitrations and track outcomes as JSONL. Nil = no logging.
+    public var decisionLog: DecisionLogger?
 
     /// Combined prompt middle section ("" until the first theme is produced).
     public private(set) var currentTheme = ""
@@ -176,6 +179,11 @@ public final class TrackThemeEngine {
     /// Current track's pool came from the deterministic hash (brains were not
     /// ready) — re-classify as soon as laya reports ready.
     private var usedHashFallback = false
+    /// Last sampled playback position/duration (for outcome logging).
+    private var lastKnownPosition: Double = 0
+    private var lastKnownDuration: Double = 0
+    /// Outcome already logged for this track id (dedup switch-then-stop).
+    private var lastOutcomeTrackID = ""
 
     /// laya sidecar finished loading (wire to LayaClient.onReady). If the
     /// current track was hash-fallback, drop it so the next tick reclassifies
@@ -215,6 +223,7 @@ public final class TrackThemeEngine {
         if !music.playing || music.trackName.isEmpty {
             currentMusicID = ""
             if !lastTrackID.isEmpty {
+                logOutcome(trackID: lastTrackID)
                 lastTrackID = ""; pendingTrackID = nil
                 currentTheme = ""; currentEmotionID = ""; currentThemeID = ""
                 currentThemeZH = ""; currentThemeEN = ""; lineEmotionID = ""
@@ -226,6 +235,9 @@ public final class TrackThemeEngine {
             return
         }
         currentMusicID = id
+        lastKnownPosition = music.position
+        lastKnownDuration = music.duration
+        if !lastTrackID.isEmpty, id != lastTrackID { logOutcome(trackID: lastTrackID) }
         guard id != lastTrackID, id != inFlightTrackID else { return }
         if pendingTrackID != id {
             pendingTrackID = id
@@ -239,6 +251,21 @@ public final class TrackThemeEngine {
         inFlightTrackID = id
         classifyTrack(id: id, name: music.trackName, artist: music.artist,
                       album: music.album, genre: music.genre, lines: Array(lines))
+    }
+
+    // MARK: - Decision logging (R0)
+
+    /// Track ended or was switched away: playback outcome (→ skip rate).
+    private func logOutcome(trackID: String) {
+        guard !trackID.isEmpty, trackID != lastOutcomeTrackID else { return }
+        lastOutcomeTrackID = trackID
+        decisionLog?.log([
+            "type": "outcome",
+            "ts": Date().timeIntervalSince1970,
+            "trackID": trackID,
+            "playedSec": lastKnownPosition,
+            "durationSec": lastKnownDuration,
+        ])
     }
 
     // MARK: - Track classification
@@ -333,6 +360,20 @@ public final class TrackThemeEngine {
                 self.applyCurrent(lyricLine: "")
                 print("[emotion] pool: " + self.pool.map {
                     "\($0.theme.id) \(String(format: "%.2f", $0.weight))" }.joined(separator: " | "))
+                self.decisionLog?.log([
+                    "type": "track",
+                    "ts": Date().timeIntervalSince1970,
+                    "trackID": id, "name": name, "artist": artist,
+                    "album": album, "genre": genre,
+                    "lyricLines": Array(lines.prefix(4)),
+                    "answers": resp.answers,
+                    "probabilities": resp.probabilities,
+                    "pool": self.pool.map { ["id": $0.theme.id, "weight": $0.weight] },
+                    "subjectCat": cat,
+                    "fontset": fsID,
+                    "usedHashFallback": false,
+                    "truncated": resp.truncated,
+                ])
             }
         }
     }
@@ -402,8 +443,20 @@ public final class TrackThemeEngine {
     private func arbitrateSubjectCard(_ laya: LayaClient, cat: String, trackID: String, text: String) {
         let cards = SubjectPool.category(cat)
         let hashPick = { cards[Self.stableIndex("subject:" + trackID, modulo: cards.count)] }
+        let logSubject: (SubjectCard, String) -> Void = { card, source in
+            self.decisionLog?.log([
+                "type": "subject",
+                "ts": Date().timeIntervalSince1970,
+                "trackID": trackID,
+                "cat": cat,
+                "subject": card.id,
+                "source": source,
+            ])
+        }
         guard laya.ready, laya.lanes.contains(.track), cards.count > 1 else {
-            setSubject(hashPick())
+            let card = hashPick()
+            setSubject(card)
+            logSubject(card, "hash")
             emitPrompt(lyricLine: lastObservedLine)   // refresh with the card included
             return
         }
@@ -413,8 +466,10 @@ public final class TrackThemeEngine {
         ]) { [weak self] resp in
             DispatchQueue.main.async {
                 guard let self, self.currentMusicID == trackID else { return }
-                self.setSubject(resp?.answers["subject"].flatMap { SubjectPool.byID($0) }
-                    ?? hashPick())
+                let picked = resp?.answers["subject"].flatMap { SubjectPool.byID($0) }
+                let card = picked ?? hashPick()
+                self.setSubject(card)
+                logSubject(card, picked != nil ? "laya" : "hash")
                 self.emitPrompt(lyricLine: self.lastObservedLine)   // refresh with the card
             }
         }
@@ -429,7 +484,8 @@ public final class TrackThemeEngine {
         let cat = SubjectPool.categories[Self.stableIndex("subjectcat:" + id,
                                                           modulo: SubjectPool.categories.count)]
         let cards = SubjectPool.category(cat)
-        setSubject(cards[Self.stableIndex("subject:" + id, modulo: cards.count)])
+        let card = cards[Self.stableIndex("subject:" + id, modulo: cards.count)]
+        setSubject(card)
         trackEmotion = emo
         lineEmotion = nil; lineEmotionProb = 0; lineEmotionID = ""
         usedHashFallback = true
@@ -439,6 +495,15 @@ public final class TrackThemeEngine {
                                                       modulo: LyricFontPool.all.count)].id
         currentFontSetID = fsID
         onFontSet?(fsID)
+        decisionLog?.log([
+            "type": "track",
+            "ts": Date().timeIntervalSince1970,
+            "trackID": id, "name": name,
+            "answers": ["emotion": emo.id, "theme": theme.id,
+                        "subject_cat": cat, "fontset": fsID],
+            "subject": card.id,
+            "usedHashFallback": true,
+        ])
         applyCurrent(lyricLine: "")
     }
 

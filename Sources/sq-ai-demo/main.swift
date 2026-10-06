@@ -346,6 +346,7 @@ do {
     let groove = GrooveEnvelope()   // v5: slowEnergy + kickEnv scene uniforms
     let lyrics = LyricsService()
     let themeEngine = TrackThemeEngine()
+    themeEngine.decisionLog = DecisionLogger(path: repoRoot + "/logs/decisions.jsonl")
     let metadataActive = (cli.audioSource == "music" || cli.audioSource == "system")
     if metadataActive {
         music.start()
