@@ -17,9 +17,9 @@ and lyric typography. No Unity, no web stack, no cloud.
 | ![AI-stylized view](docs/example-ai-tile.png) | ![raw raymarch view](docs/example-raw-tile.png) |
 | AI-stylized (StreamDiffusion img2img, CoreML) | raw raymarch layer (hold-G peek) |
 
-| AI quilt (7x8 = 56 views) | raw quilt + lyric overlay, interlaced for the panel |
-|---|---|
-| ![AI quilt](docs/example-ai-quilt-v5.png) | ![interlaced with overlay](docs/example-overlay.png) |
+| AI quilt (7x8 = 56 views) | raw quilt + lyric overlay, interlaced for the panel | on the panel (photo) |
+|---|---|---|
+| ![AI quilt](docs/example-ai-quilt-v5.png) | ![interlaced with overlay](docs/example-overlay.png) | ![Looking Glass panel, live](docs/device-panel.png) |
 
 Verified on Looking Glass Go (LKG-E10707) + Apple M5 Max @ 60 FPS, GPU ~9.5 ms/frame
 at full 4092x4092 quilt resolution (base demo scene); the AI pipeline holds 60 FPS
@@ -325,6 +325,8 @@ rewards) stages improve from there. Checkpoints and fixture versions sync via a
 private HF repo.
 
 ## StreamQuilt Studio (GUI)
+
+![StreamQuilt Studio — live session](docs/studio-gui.png)
 
 `streamquilt` (built by `scripts/build_app.sh` into `StreamQuilt.app`) wraps the
 same pipeline in a SwiftUI control panel: prompt editor with history, render
