@@ -1,0 +1,404 @@
+{
+ "n": 120,
+ "model": "/Users/jup33q/Documents/kimi/workspace/laya-coreml/models/multilingual",
+ "fixture": "python/laya_judge_fixture.jsonl",
+ "ts": 1791207212.360049,
+ "theme": {
+  "n": 120,
+  "top1": 0.1,
+  "top3": 0.2333,
+  "ece10": 0.3149,
+  "bins": [
+   {
+    "bin": "0.1-0.2",
+    "n": 3,
+    "acc": 0.0,
+    "conf": 0.19
+   },
+   {
+    "bin": "0.2-0.3",
+    "n": 35,
+    "acc": 0.057,
+    "conf": 0.256
+   },
+   {
+    "bin": "0.3-0.4",
+    "n": 28,
+    "acc": 0.071,
+    "conf": 0.348
+   },
+   {
+    "bin": "0.4-0.5",
+    "n": 22,
+    "acc": 0.136,
+    "conf": 0.442
+   },
+   {
+    "bin": "0.5-0.6",
+    "n": 12,
+    "acc": 0.083,
+    "conf": 0.544
+   },
+   {
+    "bin": "0.6-0.7",
+    "n": 11,
+    "acc": 0.182,
+    "conf": 0.639
+   },
+   {
+    "bin": "0.7-0.8",
+    "n": 5,
+    "acc": 0.2,
+    "conf": 0.757
+   },
+   {
+    "bin": "0.8-0.9",
+    "n": 3,
+    "acc": 0.333,
+    "conf": 0.843
+   },
+   {
+    "bin": "0.9-1.0",
+    "n": 1,
+    "acc": 0.0,
+    "conf": 0.926
+   }
+  ],
+  "confusions": [
+   {
+    "gold": "watercolor",
+    "pred": "synthwave",
+    "n": 23
+   },
+   {
+    "gold": "woodcut-bw",
+    "pred": "synthwave",
+    "n": 11
+   },
+   {
+    "gold": "ink-wash",
+    "pred": "synthwave",
+    "n": 10
+   },
+   {
+    "gold": "cyberpunk-rain",
+    "pred": "synthwave",
+    "n": 8
+   },
+   {
+    "gold": "watercolor",
+    "pred": "ghibli-pastoral",
+    "n": 5
+   },
+   {
+    "gold": "synthwave",
+    "pred": "ghibli-pastoral",
+    "n": 4
+   },
+   {
+    "gold": "glitch",
+    "pred": "synthwave",
+    "n": 3
+   },
+   {
+    "gold": "retro-space",
+    "pred": "synthwave",
+    "n": 3
+   }
+  ]
+ },
+ "emotion": {
+  "n": 120,
+  "top1": 0.175,
+  "top3": 0.425,
+  "ece10": 0.3068,
+  "bins": [
+   {
+    "bin": "0.1-0.2",
+    "n": 7,
+    "acc": 0.143,
+    "conf": 0.18
+   },
+   {
+    "bin": "0.2-0.3",
+    "n": 30,
+    "acc": 0.1,
+    "conf": 0.264
+   },
+   {
+    "bin": "0.3-0.4",
+    "n": 28,
+    "acc": 0.25,
+    "conf": 0.344
+   },
+   {
+    "bin": "0.4-0.5",
+    "n": 14,
+    "acc": 0.214,
+    "conf": 0.458
+   },
+   {
+    "bin": "0.5-0.6",
+    "n": 7,
+    "acc": 0.0,
+    "conf": 0.567
+   },
+   {
+    "bin": "0.6-0.7",
+    "n": 5,
+    "acc": 0.0,
+    "conf": 0.63
+   },
+   {
+    "bin": "0.7-0.8",
+    "n": 6,
+    "acc": 0.167,
+    "conf": 0.766
+   },
+   {
+    "bin": "0.8-0.9",
+    "n": 8,
+    "acc": 0.25,
+    "conf": 0.85
+   },
+   {
+    "bin": "0.9-1.0",
+    "n": 15,
+    "acc": 0.267,
+    "conf": 0.938
+   }
+  ],
+  "confusions": [
+   {
+    "gold": "melancholic",
+    "pred": "lonely",
+    "n": 5
+   },
+   {
+    "gold": "rebellious",
+    "pred": "joyful",
+    "n": 5
+   },
+   {
+    "gold": "melancholic",
+    "pred": "romantic",
+    "n": 4
+   },
+   {
+    "gold": "hopeful",
+    "pred": "joyful",
+    "n": 4
+   },
+   {
+    "gold": "dreamy",
+    "pred": "joyful",
+    "n": 3
+   },
+   {
+    "gold": "dreamy",
+    "pred": "melancholic",
+    "n": 3
+   },
+   {
+    "gold": "serene",
+    "pred": "joyful",
+    "n": 3
+   },
+   {
+    "gold": "melancholic",
+    "pred": "joyful",
+    "n": 3
+   }
+  ]
+ },
+ "subject_cat": {
+  "n": 120,
+  "top1": 0.2583,
+  "top3": 0.6417,
+  "ece10": 0.4706,
+  "bins": [
+   {
+    "bin": "0.3-0.4",
+    "n": 7,
+    "acc": 0.286,
+    "conf": 0.359
+   },
+   {
+    "bin": "0.4-0.5",
+    "n": 12,
+    "acc": 0.25,
+    "conf": 0.454
+   },
+   {
+    "bin": "0.5-0.6",
+    "n": 17,
+    "acc": 0.412,
+    "conf": 0.55
+   },
+   {
+    "bin": "0.6-0.7",
+    "n": 18,
+    "acc": 0.222,
+    "conf": 0.645
+   },
+   {
+    "bin": "0.7-0.8",
+    "n": 12,
+    "acc": 0.333,
+    "conf": 0.738
+   },
+   {
+    "bin": "0.8-0.9",
+    "n": 20,
+    "acc": 0.15,
+    "conf": 0.853
+   },
+   {
+    "bin": "0.9-1.0",
+    "n": 34,
+    "acc": 0.235,
+    "conf": 0.96
+   }
+  ],
+  "confusions": [
+   {
+    "gold": "architecture",
+    "pred": "people",
+    "n": 22
+   },
+   {
+    "gold": "animal",
+    "pred": "people",
+    "n": 14
+   },
+   {
+    "gold": "vehicle",
+    "pred": "people",
+    "n": 9
+   },
+   {
+    "gold": "animal",
+    "pred": "vehicle",
+    "n": 8
+   },
+   {
+    "gold": "people",
+    "pred": "vehicle",
+    "n": 7
+   },
+   {
+    "gold": "architecture",
+    "pred": "vehicle",
+    "n": 6
+   },
+   {
+    "gold": "architecture",
+    "pred": "animal",
+    "n": 4
+   },
+   {
+    "gold": "people",
+    "pred": "animal",
+    "n": 4
+   }
+  ]
+ },
+ "subject(card|pred-cat)": {
+  "n": 120,
+  "top1": 0.1083,
+  "top3": 0.2,
+  "ece10": 0.4582,
+  "bins": [
+   {
+    "bin": "0.2-0.3",
+    "n": 7,
+    "acc": 0.143,
+    "conf": 0.271
+   },
+   {
+    "bin": "0.3-0.4",
+    "n": 20,
+    "acc": 0.05,
+    "conf": 0.349
+   },
+   {
+    "bin": "0.4-0.5",
+    "n": 24,
+    "acc": 0.083,
+    "conf": 0.451
+   },
+   {
+    "bin": "0.5-0.6",
+    "n": 18,
+    "acc": 0.0,
+    "conf": 0.559
+   },
+   {
+    "bin": "0.6-0.7",
+    "n": 16,
+    "acc": 0.062,
+    "conf": 0.636
+   },
+   {
+    "bin": "0.7-0.8",
+    "n": 18,
+    "acc": 0.333,
+    "conf": 0.751
+   },
+   {
+    "bin": "0.8-0.9",
+    "n": 14,
+    "acc": 0.071,
+    "conf": 0.84
+   },
+   {
+    "bin": "0.9-1.0",
+    "n": 3,
+    "acc": 0.333,
+    "conf": 0.925
+   }
+  ],
+  "confusions": [
+   {
+    "gold": "skywhale",
+    "pred": "wanderer",
+    "n": 6
+   },
+   {
+    "gold": "neontower",
+    "pred": "wanderer",
+    "n": 6
+   },
+   {
+    "gold": "skywhale",
+    "pred": "zeppelin",
+    "n": 5
+   },
+   {
+    "gold": "ruins",
+    "pred": "crane",
+    "n": 4
+   },
+   {
+    "gold": "wanderer",
+    "pred": "witch",
+    "n": 4
+   },
+   {
+    "gold": "neontower",
+    "pred": "dancer",
+    "n": 4
+   },
+   {
+    "gold": "skywhale",
+    "pred": "dancer",
+    "n": 4
+   },
+   {
+    "gold": "astronaut",
+    "pred": "wanderer",
+    "n": 3
+   }
+  ]
+ }
+}

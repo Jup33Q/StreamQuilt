@@ -49,10 +49,15 @@ ANE 时延不变、hash 兜底不变）。
 
 ### R0 评估夹具 + 决策日志（地基，先做）
 
+> 状态（2026-10-05）：1 ✅ 已实现待滚量 / 2 ✅ 120 首全覆盖 / 3 ✅ 基线见下表。
+> 验收缺口：真实 episode 需带新 build 的听歌会话累积。
+
 1. **决策 JSONL 落盘**（TrackThemeEngine）：每次 track 分类记
    `{ts, trackID, name, artist, lyricLines[:4], answers, probabilities, pool, subject, fontset, usedHashFallback}`；
    曲目结束/切换时记 outcome `{trackID, playedSec, durationSec}`（→ 跳过率）。
    写 `logs/decisions.jsonl`（gitignore）。主 runloop 追加写，不进帧路径。
+   （实现：`Sources/StreamQuilt/AI/DecisionLogger.swift` + 引擎埋点，
+   sq-ai-demo/Studio 均接线；subject 二段仲裁单列 `type:subject` 事件带 source。）
 2. **评估夹具**：从 Music 资料库 AppleScript 拉 555 首清单，分层抽 ~120 首
    （中/英/日、摇滚/流行/古典/电子均衡）→ **Ollama 混合裁判初标**（见下）+ 人工复核 →
    `python/laya_judge_fixture.jsonl`（字段：name, artist, theme, emotion, subject, source）。
@@ -62,18 +67,41 @@ ANE 时延不变、hash 兜底不变）。
 - 双模型独立裁决同一题面（与 app 完全相同的 id 列表）：`gemma4:e4b-mlx`（9.5GB）+
   `qwen3.8:27b-mlx`（18.2GB），均本机 Ollama 已装。中文曲目 qwen 优先参考，
   英/日/多语 gemma 优先参考。
-- 一致性规则：
-  - **双模型一致** → 直接收录，`source: jury-agree`（高置信）；
-  - **不一致** → 进人工复核队列 `source: jury-split`（不重投、不掷硬币——分歧样本
-    恰恰是评估集里最有信息量的，必须人来定）；
-  - 可选重量级仲裁：本机还有 `gpt-oss:120b`/`gemma4:31b`，分歧量大时再启用。
-- 题面要求严格 JSON 输出 {theme, emotion, subject}（Ollama `format: json`），
-  非法/超界答案重试 2 次后记 invalid。两模型 temperature 0。
-- 产量预估：120 首 × 3 题 × 2 模型 ≈ 720 次调用，本地 M 系列分钟级跑完。
+- 一致性规则（**2026-10-05 实施修订：逐字段一致**——全记录三字段一致过于严格，
+  实测首轮 0/33，主题/主体两个主观维度双模型天然分歧大）：
+  - **逐字段一致** → 该字段直接收录，`fieldSources.<field>: jury-agree`（高置信）；
+  - **字段不一致（双方均有效）** → 重量级仲裁 `gemma4:31b` 做 **A/B 二选一**
+    （比自由作答可靠），收录为 `jury-arbiter:gemma4:31b`（中置信）；
+  - 仲裁仍无效 / 单侧无效 → 留人工复核（`jury-invalid`）。`gpt-oss:120b` 备用。
+  - 首轮实测（120 首 ×3 字段 = 360）：jury-agree 127（35%），仲裁 233（65%），
+    invalid 0。主题分歧最大（79/120 需仲裁），情感次之（64），主体（90）。
+- 题面要求严格 JSON 输出 {theme, emotion, subject}（Ollama `format: json` +
+  **`think: false`**——thinking 模型不关会烧光 num_predict 返回空串），
+  非法/超界答案重试 2 次。两模型 temperature 0。parse 需容错模型复读
+  展示串（`"ink-wash (水墨山水)"` → `ink-wash`）。
+- 产量实测：120 首 × 2 教师 ≈ 6 分钟；仲裁 111 首 ≈ 2 分钟（M 系列本地）。
 3. **评估器** `python/laya_judge_eval.py`：用 laya-coreml venv 跑**与 app 完全相同的
-   问题集**（theme 18/emotion 14/subject 24），输出 top-1/top-3 命中率 + 10 桶 ECE +
-   逐类混淆。基线数值记入本 plan。
+   问题集**（theme 18/emotion 14/subject_cat 5 + fontset 9 同请求，再二段类内卡），
+   输出 top-1/top-3 命中率 + 10 桶 ECE + 逐类混淆。
 4. 验收：夹具 ≥100 首；基线报告落盘；日志滚出 ≥20 条真实 episode。
+
+### R0 基线（2026-10-05，120 首夹具，全文 `docs/laya-judge-baseline.md`）
+
+| 问题 | top-1 | top-3 | ECE(10) | 主要偏差 |
+|---|---|---|---|---|
+| theme (18) | 0.100 | 0.233 | 0.315 | **synthwave 吸引子**：watercolor→synthwave×23、woodcut-bw→×11、ink-wash→×10 |
+| emotion (14) | 0.175 | 0.425 | 0.307 | melancholic→lonely、rebellious→joyful |
+| subject_cat (5) | 0.258 | 0.642 | 0.471 | **people 吸引子**：architecture→people×22、animal→×14 |
+| subject 卡（二段，预测类内） | 0.108 | 0.200 | 0.458 | wanderer/zeppelin 偏置；低于随机（~0.15） |
+
+- 参考随机水平：theme 0.056 / emotion 0.071 / subject_cat 0.2 / 卡 ~0.15。
+- 注意：标签 65% 来自仲裁（主观题），数值是「与评审团一致率」，是真实质量的
+  下界；但 synthwave/people 吸引子与 ECE 偏高是明确的改进靶点（R1 DPO 素材：
+  laya 判 synthwave 而评审团判其他的 52 例就是现成偏好对）。
+- 夹具：`python/laya_judge_fixture.jsonl` 120 首（lang en90/zh21/ja9；
+  94 首带 LRCLIB 前 4 行歌词；字段标签全覆盖，含 `fieldSources`/`jury` 溯源）。
+  构建管线 `python/laya_judge_fixture.py`（dump→sample→lyrics→jury→arbitrate，
+  各阶段可续跑）；答案空间镜像 `python/laya_judge_data.py`。
 
 ### R1 教师偏好 + 迭代 DPO（性价比最高，先走）
 
