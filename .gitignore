@@ -6,3 +6,7 @@
 legacy/
 models/
 /tmp/
+/logs/
+python/__pycache__/
+python/music_library.jsonl
+python/laya_judge_candidates.jsonl

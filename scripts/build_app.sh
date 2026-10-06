@@ -19,6 +19,14 @@ cp .build/release/streamquilt "$APPDIR/Contents/MacOS/streamquilt"
 cp Sources/StreamQuiltApp/Info.plist "$APPDIR/Contents/Info.plist"
 cp assets/AppIcon.icns "$APPDIR/Contents/Resources/AppIcon.icns"
 
+# Stable signing identity so TCC permissions (microphone / automation /
+# Documents / screen recording) survive rebuilds — ad-hoc signatures change
+# cdhash every build, which makes TCC re-prompt everything previously granted.
+SIGN_IDENTITY="${STREAMQUILT_SIGN_IDENTITY:-Apple Development: zxgzg@sh163.net (2C4Z57NY9G)}"
+xattr -cr "$APP" "$APPDIR"   # Finder info / quarantine detritus breaks codesign
+codesign --force --sign "$SIGN_IDENTITY" "$APP"
+codesign --force --sign "$SIGN_IDENTITY" "$APPDIR"
+
 echo "built: $APP"
 echo "run:   $APP/Contents/MacOS/sq-ai-demo"
 echo "built: $APPDIR"
